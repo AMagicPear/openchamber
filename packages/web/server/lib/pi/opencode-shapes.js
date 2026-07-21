@@ -16,6 +16,19 @@ function timestamp(value, fallback = 0) {
   return fallback;
 }
 
+/**
+ * Returns true when the cwd is a macOS per-user temporary directory
+ * (/var/folders/<XX>/<UUID>/T/...) that should not appear in session
+ * listings or project directories.
+ */
+export function shouldHidePiCwd(cwd) {
+  if (!cwd) return true;
+  const resolved = path.resolve(cwd);
+  const segs = resolved.split(path.sep).filter(Boolean);
+  return (segs.at(0) === 'var' && segs.at(1) === 'folders' && segs.at(4) === 'T')
+    || (segs.at(0) === 'private' && segs.at(1) === 'var' && segs.at(2) === 'folders' && segs.at(5) === 'T');
+}
+
 function requiredDate(value, name) {
   const parsed = timestamp(value, NaN);
   if (!Number.isFinite(parsed)) throw new TypeError(`Pi session ${name} is invalid`);

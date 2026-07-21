@@ -1,6 +1,7 @@
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import path from 'node:path';
 import { createProjectIdFromPath } from '../projects/project-id.js';
+import { shouldHidePiCwd } from './opencode-shapes.js';
 
 const timestampOf = (value) => {
   if (value instanceof Date) {
@@ -22,21 +23,6 @@ const normalizeAbsolutePath = (value) => {
     return null;
   }
   return path.resolve(value);
-};
-
-/**
- * Returns true when the cwd is a macOS per-user temporary directory
- * (/var/folders/<XX>/<UUID>/T/...) that should not appear in session
- * listings or project directories.
- */
-export const shouldHidePiCwd = (cwd) => {
-  if (!cwd) return true;
-  const resolved = path.resolve(cwd);
-  const segs = resolved.split(path.sep).filter(Boolean);
-  // /var/folders/<XX>/<UUID>/T/...          → segs[0]=var,    segs[4]=T
-  // /private/var/folders/<XX>/<UUID>/T/...  → segs[0]=private, segs[5]=T
-  return (segs.at(0) === 'var' && segs.at(1) === 'folders' && segs.at(4) === 'T')
-    || (segs.at(0) === 'private' && segs.at(1) === 'var' && segs.at(2) === 'folders' && segs.at(5) === 'T');
 };
 
 const projectTimestamps = (session) => {

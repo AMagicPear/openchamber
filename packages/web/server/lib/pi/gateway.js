@@ -12,10 +12,10 @@ import {
   normalizePiSessionInfo,
   piSessionToGlobalSession,
   piSessionToOpenCodeSession,
+  shouldHidePiCwd,
 } from './opencode-shapes.js';
 import { createPiLiveSessionRegistry } from './live-session-registry.js';
 import { createPiEventTranslator } from './event-translator.js';
-import { shouldHidePiCwd } from './project-discovery.js';
 
 function fail(status, name, message) {
   const error = new Error(message);
