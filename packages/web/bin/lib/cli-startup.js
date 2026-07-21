@@ -82,7 +82,7 @@ function collectStartupEnv(options = {}) {
   );
 
   if (options.envSnapshot !== false) {
-    const opencodeBinary = process.env.OPENCODE_BINARY || searchPathFor('opencode');
+    const opencodeBinary = process.env.OPENCODE_BINARY || searchPathFor('pi');
     if (typeof opencodeBinary === 'string' && opencodeBinary.trim().length > 0) {
       env.OPENCODE_BINARY = opencodeBinary.trim();
     }

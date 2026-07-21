@@ -153,14 +153,14 @@ async function checkOpenCodeCLI(onNotice) {
     }
   }
 
-  const resolvedFromPath = searchPathFor('opencode');
+  const resolvedFromPath = searchPathFor('pi');
   if (resolvedFromPath) {
     process.env.OPENCODE_BINARY = resolvedFromPath;
     return resolvedFromPath;
   }
 
   throw new Error(
-    `Unable to locate the opencode CLI on PATH (${process.env.PATH || '<empty>'}). ` +
+    `Unable to locate the pi CLI on PATH (${process.env.PATH || '<empty>'}). ` +
     'Ensure the CLI is installed and reachable, or set OPENCODE_BINARY to its full path.'
   );
 }
