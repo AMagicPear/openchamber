@@ -205,3 +205,58 @@ Temporary/unavailable-directory filtering and hide semantics are deferred, as
 requested. This phase prioritizes correctness and coverage of every valid Pi
 session cwd.
 
+## Phase 3: prompt, abort, delete, and live event translation
+
+Status: implemented as the core mutation vertical for the Pi backend.
+
+### Added
+
+- `packages/web/server/lib/pi/event-translator.js` and focused tests
+  (18 tests): subscribes to Pi RPC stdout events and converts them to
+  OpenCode V1 SSE events (`message.updated`, `message.part.updated`,
+  `message.part.delta`, `session.status`, `session.idle`). Generates
+  counter-based live message/part IDs (`msg_live_<turn>_<msg>_<contentIndex>`)
+  without depending on Pi durable entry IDs. Consumes the actual Pi
+  `AssistantMessageEvent` types (`text_*`, `thinking_*`, `toolcall_*`)
+  per contentIndex, so interleaved text/thinking/toolcall blocks stream
+  without losing deltas. Assistant messages carry `path: { cwd, root }`
+  and `parentID` so live and durable shapes stay consistent on reload.
+- Alias reconciliation via `get_entries` fallback on `agent_settled`, with
+  content-based matching. Pi does not broadcast `entry_appended` for
+  normal `appendMessage` paths, so the durable alias write happens via
+  the post-settled pass instead.
+- `POST /session/:sessionID/prompt_async` gateway route: accepts SDK's
+  `{ parts: [{ type: "text", text: "..." }] }` body, supports image-only
+  / file-only prompts (no text required), reserves the explicit
+  `messageID`, sends `prompt` RPC command (fire-and-forget), and returns
+  **HTTP 204 No Content** to match the OpenCode V2
+  `SessionPromptAsyncResponses` contract. The UI uses its optimistic
+  messageID; agent completion arrives through event translation.
+- `POST /session/:sessionID/abort` gateway route: sends `abort` RPC
+  command, returns `true`.
+- `DELETE /session/:sessionID` gateway route: stops live Pi process,
+  deletes the JSONL session file, cleans up alias records, invalidates
+  caches, publishes `session.deleted` SSE carrying the full Session
+  object in `properties.info` (so the UI reducer can remove the session
+  without re-fetching), returns `true`.
+- `GET /session/:sessionID/message` now queries the repository first and
+  falls back to empty `[]` for brand-new live sessions. Repository cache
+  is invalidated on `agent_settled` so messages are immediately visible.
+- Event translator lifecycle bound to gateway start/close; subscribes to
+  `tool_execution_start` so tool parts carry accurate start times.
+
+### Verified
+
+- Pi gateway tests: 18/18 (5 new for prompt_async, abort, DELETE, session.deleted shape, image-only prompt)
+- Event translator tests: 18/18 (rewritten to consume real Pi `AssistantMessageEvent` types, +5 for path/parentID, interleaved blocks, JSON arg fallback, tool start time tracking)
+- RPC, lifecycle, registry, alias store tests: no regressions (108/108 total)
+- web type-check, lint, docs validation
+
+### Remaining
+
+- Permission/question translation from `extension_ui_request` events.
+- Session update/archive/fork/title mutation routes.
+- `packages/ui` SSE integration to consume live status events during generation.
+- Debounced `repository.invalidate` on `agent_settled` to avoid sidebar
+  rebuilds on multi-turn sessions.
+

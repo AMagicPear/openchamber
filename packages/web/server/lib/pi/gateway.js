@@ -1,6 +1,7 @@
 import express from 'express';
 import { createServer } from 'node:http';
 import { existsSync, statSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { VERSION } from '@earendil-works/pi-coding-agent';
@@ -13,6 +14,7 @@ import {
   piSessionToOpenCodeSession,
 } from './opencode-shapes.js';
 import { createPiLiveSessionRegistry } from './live-session-registry.js';
+import { createPiEventTranslator } from './event-translator.js';
 
 function fail(status, name, message) {
   const error = new Error(message);
@@ -136,6 +138,7 @@ export function createPiCompatibilityGateway(options = {}) {
       throw new TypeError('messageAliasStore is invalid');
     }
   }
+  const messageAliasStore = options.messageAliasStore;
   const repository = options.sessionRepository;
   const defaultDirectory = options.defaultDirectory || process.cwd();
   const configProvider = options.configProvider || (() => ({}));
@@ -156,6 +159,7 @@ export function createPiCompatibilityGateway(options = {}) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
   const sseClients = new Set();
+  const eventTranslators = new Map();
   let sseEventId = 0;
 
   const health = (_req, res) => sendJson(res, { healthy: true, version });
@@ -295,8 +299,34 @@ export function createPiCompatibilityGateway(options = {}) {
       : piSessionToOpenCodeSession(session, { sessionIndex: index, version }));
   }
 
+  function translatorKey(cwd, sessionId) {
+    return JSON.stringify([cwd, sessionId]);
+  }
+
   app.get('/experimental/session', route(async (req, res) => sendJson(res, await listRoute(req, res, true))));
   app.get('/session', route(async (req, res) => sendJson(res, await listRoute(req, res, false))));
+
+  function getOrCreateEventTranslator(sessionId, cwd, binding) {
+    const key = translatorKey(cwd, sessionId);
+    const existing = eventTranslators.get(key);
+    if (existing && !existing.isClosed) return existing;
+    const translator = createPiEventTranslator({
+      sessionId,
+      cwd,
+      processManager,
+      processKey: binding.processKey,
+      messageAliasStore: options.messageAliasStore,
+      onEvent: (payload) => publishSseEvent(payload, cwd),
+      onSettled: () => {
+        if (typeof repository.invalidate === 'function') {
+          Promise.resolve().then(() => repository.invalidate({ directory: cwd })).catch(() => {});
+          Promise.resolve().then(() => repository.invalidate()).catch(() => {});
+        }
+      },
+    });
+    eventTranslators.set(key, translator);
+    return translator;
+  }
 
   app.post('/session', route(async (req, res) => {
     const directory = optionalDirectory(req, defaultDirectory);
@@ -322,6 +352,36 @@ export function createPiCompatibilityGateway(options = {}) {
     }
     publishSseEvent({ type: 'session.created', properties: { info: session } }, directory);
     sendJson(res, session);
+  }));
+
+  app.delete('/session/:sessionID', route(async (req, res) => {
+    const directory = optionalDirectory(req, defaultDirectory);
+    const sessionId = req.params.sessionID;
+
+    const live = liveSessions?.get({ cwd: directory, sessionId });
+    const info = live
+      ? { id: sessionId, path: live.sessionPath, cwd: live.cwd, created: new Date(live.createdAt), modified: new Date(live.createdAt), name: undefined }
+      : await repository.getSession(sessionId, { directory });
+    if (!info?.path) throw fail(404, 'NotFoundError', 'session not found');
+
+    const session = piSessionToOpenCodeSession(info, { version });
+
+    if (liveSessions) await liveSessions.remove({ cwd: directory, sessionId });
+    const tKey = translatorKey(directory, sessionId);
+    const t = eventTranslators.get(tKey);
+    if (t) { t.close(); eventTranslators.delete(tKey); }
+
+    await unlink(info.path).catch((e) => {
+      if (e?.code !== 'ENOENT') throw e;
+    });
+    if (messageAliasStore) await messageAliasStore.removeSession(sessionId);
+    if (typeof repository.invalidate === 'function') {
+      await repository.invalidate({ directory });
+      await repository.invalidate();
+    }
+
+    publishSseEvent({ type: 'session.deleted', properties: { sessionID: sessionId, info: session } }, directory);
+    sendJson(res, true);
   }));
 
   app.get('/session/status', route(async (req, res) => {
@@ -357,31 +417,105 @@ export function createPiCompatibilityGateway(options = {}) {
     sendJson(res, piSessionToOpenCodeSession(info, { sessionIndex: index, version }));
   }));
 
+  // Shared prompt handler — accepts both SDK prompt_async and simpler prompt bodies.
+  async function handlePrompt(req, res) {
+    const directory = req.query.directory !== undefined
+      ? directoryValue(req.query.directory)
+      : optionalDirectory(req, defaultDirectory);
+    const body = req.body || {};
+
+    // Extract text from SDK parts array or direct text field.
+    // Image-only and file-only prompts are allowed — Pi accepts content arrays
+    // without text. Empty bodies (no text and no parts) are still rejected.
+    const text = (() => {
+      if (typeof body.text === 'string' && body.text.trim()) return body.text;
+      if (Array.isArray(body.parts)) {
+        return body.parts
+          .filter((p) => p?.type === 'text')
+          .map((p) => p.text || '')
+          .join('\n')
+          .trim();
+      }
+      return '';
+    })();
+    const hasParts = Array.isArray(body.parts) && body.parts.length > 0;
+    if (!text && !hasParts) throw fail(400, 'BadRequestError', 'prompt text or parts are required');
+
+    if (!liveSessions) throw fail(501, 'UnsupportedError', 'session prompt is not available');
+    if (!processManager) throw fail(503, 'UpstreamError', 'RPC process manager is not available');
+
+    const binding = liveSessions.get({ cwd: directory, sessionId: req.params.sessionID });
+    if (!binding) throw fail(404, 'NotFoundError', 'live session not found');
+
+    const translator = getOrCreateEventTranslator(binding.sessionId, directory, binding);
+    const messageId = translator.reserveNextMessageId(body.messageID);
+
+    const images = Array.isArray(body.images) && body.images.length > 0 ? body.images : undefined;
+    const delivery = body.delivery === 'steer' ? 'steer' : body.delivery === 'followUp' ? 'followUp' : undefined;
+
+    processManager.request(binding.processKey, {
+      type: 'prompt',
+      message: text,
+      ...(images ? { images } : {}),
+      ...(delivery ? { streamingBehavior: delivery } : {}),
+    }).catch(() => {});
+
+    // OpenCode SDK SessionPromptAsyncResponses expects 204 No Content; the UI
+    // uses its own optimistic messageId returned via `promptAsync({ messageID })`.
+    res.status(204).end();
+  }
+
+  app.post('/session/:sessionID/prompt_async', route(handlePrompt));
+  app.post('/session/:sessionID/prompt', route(handlePrompt));
+
+  app.post('/session/:sessionID/abort', route(async (req, res) => {
+    const directory = optionalDirectory(req, defaultDirectory);
+    if (!liveSessions) throw fail(501, 'UnsupportedError', 'session abort is not available');
+    if (!processManager) throw fail(503, 'UpstreamError', 'RPC process manager is not available');
+
+    const binding = liveSessions.get({ cwd: directory, sessionId: req.params.sessionID });
+    if (!binding) throw fail(404, 'NotFoundError', 'live session not found');
+
+    await processManager.request(binding.processKey, { type: 'abort' });
+    sendJson(res, true);
+  }));
+
   app.get('/session/:sessionID/message', route(async (req, res) => {
+    const directory = req.query.directory === undefined ? undefined : directoryValue(req.query.directory);
+    const limit = integerQuery(req.query.limit, 'limit', 100);
+    
+    // Live sessions are still being streamed via SSE; the frontend already has
+    // the messages from live events. Return empty so the frontend doesn't
+    // receive a second copy with different (durable) IDs that would duplicate
+    // every message in the UI.
     const liveDirectory = optionalDirectory(req, defaultDirectory);
     const live = liveSessions?.get({ cwd: liveDirectory, sessionId: req.params.sessionID });
-    if (live && live.state?.messageCount === 0) {
+    if (live) {
       sendJson(res, []);
       return;
     }
-    const directory = req.query.directory === undefined ? undefined : directoryValue(req.query.directory);
-    const limit = integerQuery(req.query.limit, 'limit', 100);
+    
+    // Session is no longer live — serve from durable storage.
     const branch = await repository.getActiveBranch(req.params.sessionID, { directory });
-    if (!branch) throw fail(404, 'NotFoundError', 'session not found');
-    const messages = piBranchToOpenCodeMessages(branch.entries, {
-      sessionId: branch.info.id,
-      directory: branch.info.cwd,
-    });
-    let end = messages.length;
-    if (req.query.before !== undefined) {
-      const beforeIndex = messages.findIndex((message) => message.info.id === req.query.before);
-      if (beforeIndex < 0) throw fail(400, 'BadRequestError', 'before is invalid');
-      end = beforeIndex;
+    if (branch) {
+      const messages = piBranchToOpenCodeMessages(branch.entries, {
+        sessionId: branch.info.id,
+        directory: branch.info.cwd,
+      });
+      let end = messages.length;
+      if (req.query.before !== undefined) {
+        const beforeIndex = messages.findIndex((message) => message.info.id === req.query.before);
+        if (beforeIndex < 0) throw fail(400, 'BadRequestError', 'before is invalid');
+        end = beforeIndex;
+      }
+      const start = Math.max(0, end - limit);
+      const page = messages.slice(start, end);
+      if (start > 0) res.set('x-next-cursor', page[0]?.info.id || messages[start - 1].info.id);
+      sendJson(res, page);
+      return;
     }
-    const start = Math.max(0, end - limit);
-    const page = messages.slice(start, end);
-    if (start > 0) res.set('x-next-cursor', page[0]?.info.id || messages[start - 1].info.id);
-    sendJson(res, page);
+    
+    throw fail(404, 'NotFoundError', 'session not found');
   }));
 
   app.get('/command', (_req, _res, next) => next(fail(501, 'UnsupportedError', 'command translation is not available')));
@@ -438,6 +572,13 @@ export function createPiCompatibilityGateway(options = {}) {
     }
   }
 
+  function closeEventTranslators() {
+    for (const [key, translator] of eventTranslators) {
+      try { translator.close(); } catch {}
+      eventTranslators.delete(key);
+    }
+  }
+
   async function start() {
     if (closing) {
       await closing;
@@ -491,6 +632,7 @@ export function createPiCompatibilityGateway(options = {}) {
     }
     const target = server;
     closeSseStreams();
+    closeEventTranslators();
     closing = closeServer(target).finally(() => { closing = undefined; closeRequested = false; });
     return closing;
   }

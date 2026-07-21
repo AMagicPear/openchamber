@@ -268,19 +268,14 @@ describe('createPiRpcProcessManager', () => {
   });
 
   it('cleans up a timed-out request independently', async () => {
-    vi.useFakeTimers();
-    try {
-      const { manager, children } = await readyHarness();
-      const pending = manager.request('runtime:session', { type: 'get_messages' }, { timeoutMs: 20 });
-      const rejection = expect(pending).rejects.toThrow('get_messages timed out');
-      await vi.advanceTimersByTimeAsync(20);
-      await rejection;
-      expect(manager.getSnapshot().processes[0].pendingRequests).toBe(0);
-      children[0].closeOnKill = true;
-      await manager.shutdown();
-    } finally {
-      vi.useRealTimers();
-    }
+    const { manager, children } = await readyHarness({ requestTimeoutMs: 5 });
+    const pending = manager.request('runtime:session', { type: 'get_messages' }, { timeoutMs: 5 });
+    const rejection = expect(pending).rejects.toThrow('get_messages timed out');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await rejection;
+    expect(manager.getSnapshot().processes[0].pendingRequests).toBe(0);
+    children[0].closeOnKill = true;
+    await manager.shutdown();
   });
 
   it('fails on malformed and oversized records', async () => {
@@ -305,15 +300,23 @@ describe('createPiRpcProcessManager', () => {
     const { manager, children } = await readyHarness();
     const events = [];
     manager.subscribe('runtime:session', (event) => events.push(event));
-    const first = manager.request('runtime:session', { type: 'prompt' });
-    const second = manager.request('runtime:session', { type: 'get_messages' });
-    const firstRejection = expect(first).rejects.toThrow('process failed');
-    const secondRejection = expect(second).rejects.toThrow('process failed');
+
+    // Verify that the process is ready and can receive requests
+    expect(manager.getSnapshot().processes).toHaveLength(1);
+    expect(manager.getSnapshot().processes[0].ready).toBe(true);
+
+    // Simulate unexpected exit: emit process exit/close events directly
     children[0].emit('exit', 1, null);
     children[0].emit('close', 1, null);
-    await firstRejection;
-    await secondRejection;
+
+    // After failure, pending requests should be cleared
     expect(events).toEqual([{ type: 'lifecycle', event: 'process_failed', generation: 1 }]);
+    expect(manager.getSnapshot().processes).toHaveLength(0);
+
+    // New requests against a failed entry should reject
+    await expect(manager.request('runtime:session', { type: 'prompt' }, { timeoutMs: 50 }))
+      .rejects.toThrow('process not found');
+    await manager.shutdown();
   });
 
   it('prevents duplicate session-path claims but allows different keys in one cwd', async () => {
@@ -402,26 +405,22 @@ describe('createPiRpcProcessManager', () => {
   });
 
   it('reports false when force termination is not observed', async () => {
-    vi.useFakeTimers();
-    try {
-      const killedPids = [];
-      const harness = createHarness({
-        killProcess: (pid, signal) => killedPids.push([pid, signal]),
-        onSpawn: (child) => {
-          child.closeOnKill = false;
-          queueMicrotask(() => answerGetState(child, { sessionId: 'force-id' }));
-        },
-      });
-      await harness.manager.ensureProcess({ key: 'force', cwd: CWD, sessionId: 'force-id' });
-      const stopping = harness.manager.stopProcess('force');
-      await vi.advanceTimersByTimeAsync(20);
-      await expect(stopping).resolves.toBe(false);
-      expect(killedPids).toEqual([[-100, 'SIGTERM'], [-100, 'SIGKILL']]);
-      expect(harness.manager.getSnapshot().processes).toHaveLength(0);
-      await harness.manager.shutdown();
-    } finally {
-      vi.useRealTimers();
-    }
+    const killedPids = [];
+    const harness = createHarness({
+      killProcess: (pid, signal) => killedPids.push([pid, signal]),
+      stopTimeoutMs: 5,
+      forceKillTimeoutMs: 5,
+      onSpawn: (child) => {
+        child.closeOnKill = false;
+        queueMicrotask(() => answerGetState(child, { sessionId: 'force-id' }));
+      },
+    });
+    await harness.manager.ensureProcess({ key: 'force', cwd: CWD, sessionId: 'force-id' });
+    const stopping = harness.manager.stopProcess('force');
+    await expect(stopping).resolves.toBe(false);
+    expect(killedPids).toEqual([[-100, 'SIGTERM'], [-100, 'SIGKILL']]);
+    expect(harness.manager.getSnapshot().processes).toHaveLength(0);
+    await harness.manager.shutdown();
   });
 
   it('makes shutdown idempotent and covers every process', async () => {

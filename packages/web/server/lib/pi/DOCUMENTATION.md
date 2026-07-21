@@ -200,6 +200,88 @@ authoritative settings response with missing projects.
 Temporary/unavailable-directory filtering and user-facing hide semantics are
 intentionally deferred. This phase prioritizes complete catalog coverage.
 
+## Phase 3: prompt, abort, and live event translation
+
+`event-translator.js` converts Pi RPC stdout events to OpenCode V1 SSE events
+and handles durable message alias reconciliation on `agent_settled`.
+
+### Event translation
+
+The translator subscribes to the RPC process manager's broadcast stream and
+emits converted OpenCode SSE events through a callback wired into the gateway's
+`publishSseEvent`. It consumes the actual Pi `AssistantMessageEvent` types
+(`text_start`/`text_delta`/`text_end`, `thinking_start`/`thinking_delta`/`thinking_end`,
+`toolcall_start`/`toolcall_delta`/`toolcall_end`).
+
+| Pi event | OpenCode SSE event(s) |
+|---|---|
+| `agent_start` | `session.status` (type: busy) |
+| `message_start` | `message.updated` (provisional user or assistant info with `path`/`parentID`) |
+| `message_update` (`text_start`) | `message.part.updated` (text, empty initial) |
+| `message_update` (`text_delta`) | `message.part.delta` (text deltas) |
+| `message_update` (`text_end`) | `message.part.updated` (text, final) |
+| `message_update` (`thinking_start` / `thinking_delta` / `thinking_end`) | `message.part.updated` + `message.part.delta` for reasoning parts |
+| `message_update` (`toolcall_start`) | `message.part.updated` (tool, pending, empty input) |
+| `message_update` (`toolcall_delta`) | `message.part.updated` (tool, pending, partial JSON parsed best-effort) |
+| `message_update` (`toolcall_end`) | `message.part.updated` (tool, pending, final input/raw) |
+| `tool_execution_start` | `message.part.updated` (tool, running, time.start recorded) |
+| `tool_execution_end` (success) | `message.part.updated` (tool, completed) |
+| `tool_execution_end` (error) | `message.part.updated` (tool, error) |
+| `message_end` | `message.updated` (final assistant info with tokens/cost/finish/path/parentID) |
+| `agent_settled` | `session.idle` + alias reconciliation pass |
+
+Only OpenCode V1 SSE events are emitted (`message.updated`, `message.part.updated`,
+`message.part.delta`, `session.status`, `session.idle`). These are the events
+the UI's event-reducer processes. V2 streaming events (`session.next.*`) are
+intentionally omitted.
+
+Live message and part IDs use a counter-based `msg_live_<turn>_<msg>` scheme
+that produces lexicographically sortable IDs without depending on Pi's durable
+entry IDs. Assistant messages carry `path: { cwd, root }` and `parentID`
+(latest user message ID) so live and durable shapes remain consistent on
+reload. `turn_start`, `turn_end`, `agent_end`, `compaction_*`, and
+`thinking_level_changed` are tracked internally but do not produce standalone
+SSE events.
+
+Per-contentIndex state is tracked so text, thinking, and tool call blocks can
+interleave within one assistant message without losing deltas. `toolcall_delta`
+accumulates partial JSON; the translator tolerates malformed JSON via
+safe-parse fallback.
+
+The translator cleans up its subscription on `close()`. The gateway closes all
+translators before shutting down the SSE streams.
+
+### Alias reconciliation
+
+`entry_appended` events write durable Pi entry IDs to the message alias store
+immediately when content-matching succeeds. On `agent_settled`, the translator
+queries `get_entries` as a fallback reconciliation pass. Alias writes are
+best-effort and non-fatal to event streaming.
+
+### Gateway prompt route
+
+`POST /session/:sessionID/prompt_async` (and the simpler `/prompt` alias)
+accept the SDK's `{ parts: [{ type: "text", text: "..." }] }` body,
+reserves a live message ID, sends a `prompt` RPC command, and returns
+**HTTP 204 No Content** to match the OpenCode V2 `SessionPromptAsyncResponses`
+contract. The UI uses its optimistic message ID passed via `messageID`;
+agent completion arrives through event translation. Image-only or file-only
+prompts (no text parts) are allowed.
+
+### Gateway abort route
+
+`POST /session/:sessionID/abort` sends an `abort` RPC command and returns
+`true`. The runtime effect is observed through `agent_settled` → `session.idle`.
+
+### Gateway delete route
+
+`DELETE /session/:sessionID` resolves the session from the live registry
+or durable catalog, stops the Pi RPC process, deletes the JSONL session
+file, removes alias records, invalidates repository caches, publishes
+`session.deleted` SSE with the full Session info in `properties.info`
+(so the UI reducer can remove the session without re-fetching), and
+returns `true`.
+
 ## Phase boundary
 
 The future Compatibility Gateway will translate OpenCode 1.17.18 HTTP/SSE at the

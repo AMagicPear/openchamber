@@ -112,7 +112,7 @@ export function piDirectoryToPath(directory, options = {}) {
   };
 }
 
-function textFromContent(content) {
+export function textFromContent(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   return content
@@ -192,7 +192,7 @@ function mergeToolResult(result, toolCalls, orphanResults) {
   call.part.state = toolStateFromResult(result, call.start, call.part.state.input);
 }
 
-function assistantError(message) {
+export function assistantError(message) {
   if (message.stopReason === 'aborted') {
     return { name: 'MessageAbortedError', data: { message: String(message.errorMessage || 'Assistant message aborted') } };
   }

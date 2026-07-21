@@ -33,13 +33,15 @@ function repositoryHarness() {
   };
 }
 
-function liveSessionHarness({ create = undefined } = {}) {
+function liveSessionHarness({ create = undefined, sessionId = 'fresh-session', sessionPath } = {}) {
   const session = {
     cwd: directory,
-    sessionId: 'fresh-session',
-    sessionPath: '/sessions/fresh-session.jsonl',
+    sessionId,
+    sessionPath: sessionPath || `/sessions/${sessionId}.jsonl`,
     createdAt: 1767225600000,
-    state: { sessionId: 'fresh-session', sessionFile: '/sessions/fresh-session.jsonl', messageCount: 0 },
+    processKey: `pi:${JSON.stringify([directory, sessionId])}`,
+    processGeneration: 1,
+    state: { sessionId, sessionFile: `/sessions/${sessionId}.jsonl`, messageCount: 0 },
     generation: 1,
   };
   return {
@@ -173,6 +175,8 @@ describe('Pi compatibility gateway', () => {
 
   it('rejects unsupported SDK creation fields and serves a fresh live session without repository fallback', async () => {
     const repository = repositoryHarness();
+    // Fresh session: repository has no branch yet (Pi hasn't written any entries)
+    repository.getActiveBranch.mockResolvedValue(null);
     const liveSessions = liveSessionHarness();
     const gateway = createPiCompatibilityGateway({ sessionRepository: repository, liveSessionRegistry: liveSessions, defaultDirectory: directory });
     await request(gateway.app).post('/session').send({ parentID: 'parent' }).expect(501);
@@ -185,7 +189,6 @@ describe('Pi compatibility gateway', () => {
     });
     await request(gateway.app).get('/session/fresh-session/message').expect(200).expect([]);
     expect(repository.getSession).not.toHaveBeenCalled();
-    expect(repository.getActiveBranch).not.toHaveBeenCalled();
   });
 
   it('keeps create successful and the live lookup usable when repository invalidation fails', async () => {
@@ -339,6 +342,191 @@ describe('Pi compatibility gateway', () => {
     const second = await secondStart;
     expect(second.port).toBe(4501);
     expect(gateway.getUrl()).toBe('http://127.0.0.1:4501');
+    await gateway.close();
+  });
+
+  it('prompt_async accepts SDK parts, returns 204, and reserves an explicit messageID', async () => {
+    const liveSessions = liveSessionHarness();
+    const requests = [];
+    const processManager = {
+      request: vi.fn(async (key, command) => { requests.push({ key, command }); return { ok: true }; }),
+      subscribe: vi.fn(() => () => {}),
+      getSnapshot: vi.fn(() => ({ processes: [] })),
+    };
+    const gateway = createPiCompatibilityGateway({
+      sessionRepository: repositoryHarness(),
+      liveSessionRegistry: liveSessions,
+      processManager,
+      defaultDirectory: directory,
+    });
+
+    const res = await request(gateway.app)
+      .post(`/session/fresh-session/prompt_async?directory=${encodeURIComponent(directory)}`)
+      .send({
+        messageID: 'msg_explicit_42',
+        parts: [{ type: 'text', text: 'hello' }],
+      })
+      .expect(204);
+
+    expect(res.body).toEqual({});
+    expect(requests).toHaveLength(1);
+    expect(requests[0].command).toMatchObject({
+      type: 'prompt',
+      message: 'hello',
+    });
+    expect(processManager.request).toHaveBeenCalledTimes(1);
+    await gateway.close();
+  });
+
+  it('prompt_async allows image-only parts without text', async () => {
+    const liveSessions = liveSessionHarness();
+    const processManager = {
+      request: vi.fn(async () => ({ ok: true })),
+      subscribe: vi.fn(() => () => {}),
+      getSnapshot: vi.fn(() => ({ processes: [] })),
+    };
+    const gateway = createPiCompatibilityGateway({
+      sessionRepository: repositoryHarness(),
+      liveSessionRegistry: liveSessions,
+      processManager,
+      defaultDirectory: directory,
+    });
+
+    await request(gateway.app)
+      .post(`/session/fresh-session/prompt_async?directory=${encodeURIComponent(directory)}`)
+      .send({
+        parts: [{ type: 'file', mime: 'image/png', url: 'data:image/png;base64,AAAA' }],
+      })
+      .expect(204);
+
+    expect(processManager.request).toHaveBeenCalledTimes(1);
+    await gateway.close();
+  });
+
+  it('prompt_async rejects empty bodies with 400', async () => {
+    const liveSessions = liveSessionHarness();
+    const gateway = createPiCompatibilityGateway({
+      sessionRepository: repositoryHarness(),
+      liveSessionRegistry: liveSessions,
+      defaultDirectory: directory,
+    });
+    await request(gateway.app)
+      .post(`/session/fresh-session/prompt_async?directory=${encodeURIComponent(directory)}`)
+      .send({})
+      .expect(400);
+    await gateway.close();
+  });
+
+  it('abort sends an abort RPC and returns true', async () => {
+    const liveSessions = liveSessionHarness();
+    const processManager = {
+      request: vi.fn(async (key, command) => {
+        if (command.type === 'abort') return { ok: true };
+        throw new Error(`unexpected ${command.type}`);
+      }),
+      subscribe: vi.fn(() => () => {}),
+      getSnapshot: vi.fn(() => ({ processes: [] })),
+    };
+    const gateway = createPiCompatibilityGateway({
+      sessionRepository: repositoryHarness(),
+      liveSessionRegistry: liveSessions,
+      processManager,
+      defaultDirectory: directory,
+    });
+
+    await request(gateway.app)
+      .post(`/session/fresh-session/abort?directory=${encodeURIComponent(directory)}`)
+      .expect(200)
+      .expect('true');
+
+    expect(processManager.request).toHaveBeenCalledWith(
+      'pi:["' + directory + '","fresh-session"]',
+      { type: 'abort' },
+    );
+    await gateway.close();
+  });
+
+  it('DELETE removes the live session, deletes the file, emits session.deleted with full info', async () => {
+    const aliasStore = {
+      get: vi.fn(async () => undefined),
+      listSession: vi.fn(async () => []),
+      upsert: vi.fn(async (r) => r),
+      removeSession: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    const processManager = {
+      request: vi.fn(async () => ({ ok: true })),
+      subscribe: vi.fn(() => () => {}),
+      stopProcess: vi.fn(async () => true),
+      getSnapshot: vi.fn(() => ({ processes: [] })),
+    };
+    const liveSessions = liveSessionHarness();
+    let sessionRemoved = false;
+    // Make liveSessions.remove() invoke processManager.stopProcess like the real registry does
+    liveSessions.remove = vi.fn(async ({ cwd, sessionId }) => {
+      processManager.stopProcess(`pi:${JSON.stringify([cwd, sessionId])}`);
+      sessionRemoved = true;
+      return true;
+    });
+    // Make liveSessions.get reflect the removal so subsequent GETs return 404
+    const originalGet = liveSessions.get;
+    liveSessions.get = vi.fn(({ cwd, sessionId }) => {
+      if (sessionRemoved) return undefined;
+      return originalGet({ cwd, sessionId });
+    });
+    const repository = repositoryHarness();
+    const gateway = createPiCompatibilityGateway({
+      sessionRepository: repository,
+      liveSessionRegistry: liveSessions,
+      processManager,
+      messageAliasStore: aliasStore,
+      defaultDirectory: directory,
+    });
+    const started = await gateway.start();
+    const directoryStream = await openSse(`${started.url}/event?directory=${encodeURIComponent(directory)}`);
+
+    await request(gateway.app)
+      .delete(`/session/fresh-session?directory=${encodeURIComponent(directory)}`)
+      .expect(200)
+      .expect('true');
+
+    expect(processManager.stopProcess).toHaveBeenCalled();
+    expect(aliasStore.removeSession).toHaveBeenCalledWith('fresh-session');
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const text = directoryStream.chunks.join('');
+    expect(text).toContain('event: session.deleted');
+    // session.deleted payload must include the full Session info per SDK schema.
+    expect(text).toMatch(/"info":\{"id":"fresh-session"/);
+    expect(text).toMatch(/"sessionID":"fresh-session"/);
+
+    // After delete, GET returns 404
+    await request(gateway.app)
+      .get(`/session/fresh-session?directory=${encodeURIComponent(directory)}`)
+      .expect(404);
+
+    directoryStream.response.destroy();
+    await gateway.close();
+  });
+
+  it('DELETE returns 404 for unknown session', async () => {
+    const liveSessions = {
+      get: vi.fn(() => undefined),
+      create: vi.fn(),
+      remove: vi.fn(async () => false),
+      close: vi.fn(async () => {}),
+    };
+    void liveSessions;
+    const repository = repositoryHarness();
+    repository.getSession.mockResolvedValue(undefined);
+    const gateway = createPiCompatibilityGateway({
+      sessionRepository: repository,
+      liveSessionRegistry: liveSessions,
+      defaultDirectory: directory,
+    });
+    await request(gateway.app)
+      .delete(`/session/nonexistent?directory=${encodeURIComponent(directory)}`)
+      .expect(404);
     await gateway.close();
   });
 });

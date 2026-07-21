@@ -13,7 +13,7 @@ and its tests.
 | `prompt` | stdin -> stdout response plus events | Verified | Planned prompt translation |
 | `steer` | stdin -> stdout response plus events | Verified | Planned |
 | `follow_up` | stdin -> stdout response plus events | Verified | Planned |
-| `abort` | stdin -> stdout response | Verified | Planned abort translation |
+| `abort` | stdin -> stdout response | Verified | **implemented** — gateway POST /session/:id/abort |
 | `new_session` | stdin -> stdout response plus rebinding | Verified | Planned session mutation |
 | `get_messages` | stdin -> stdout response | Verified | Planned history translation |
 | `get_entries` / `get_tree` | stdin -> stdout response | Verified | Planned reconciliation/history |
@@ -31,19 +31,30 @@ passes an executable and argument array and never shell-interpolates them.
 
 ## Verified Pi RPC events
 
-| Pi event | Phase 1 handling | Planned OpenCode-side use |
+| Pi event | Phase 3 handling | OpenCode-side use |
 |---|---|---|
-| `message_start` / `message_update` / `message_end` | Broadcast in input order | Semantic message/part SSE translation |
-| `turn_start` / `turn_end` | Broadcast | Turn lifecycle conversion |
-| `agent_start` | Sets manager busy | Session status and activity |
-| `agent_end` | Broadcast; does not clear busy | Intermediate lifecycle only |
-| `agent_settled` | Clears manager busy | Durable reconciliation boundary |
-| `tool_execution_start/update/end` | Broadcast | Tool part conversion |
-| `compaction_start/end` | Broadcast | Compaction status conversion |
-| `thinking_level_changed` | Broadcast | Session state conversion |
-| `session_info_changed` | Broadcast | Session metadata conversion |
-| `extension_ui_request` | Broadcast | Permission/question/UI sidecar translation |
-| `extension_error` / `error` | Broadcast | Explicit failure/error conversion |
+| `message_start` | Translated to provisional `message.updated` (assistant carries `path: { cwd, root }` and `parentID`) | Live message lifecycle |
+| `message_update` (`text_start`/`text_delta`/`text_end`) | Per-contentIndex part updates + deltas | Live text part streaming |
+| `message_update` (`thinking_start`/`thinking_delta`/`thinking_end`) | Reasoning part updates + deltas | Live reasoning part streaming |
+| `message_update` (`toolcall_start`/`toolcall_delta`/`toolcall_end`) | Tool part pending with parsed JSON args | Live tool call part streaming |
+| `message_end` | Final `message.updated` with tokens/cost/finish | Live message finalization |
+| `turn_start` / `turn_end` | Internal step tracking | Turn lifecycle boundaries |
+| `agent_start` | Translated to `session.status` (busy) | Session status and activity |
+| `agent_end` | Step state cleanup | Intermediate lifecycle only |
+| `agent_settled` | Translated to `session.idle` + triggers alias reconciliation | Durable reconciliation boundary |
+| `tool_execution_start` | Tool part → running with `time.start` | Real tool start time captured |
+| `tool_execution_update` | Tracked internally | Optional progress events |
+| `tool_execution_end` | Tool part → completed/error with `time.end` | Tool part finalization |
+| `compaction_start/end` | Tracked internally | Deferred |
+| `thinking_level_changed` | Tracked internally | Deferred |
+| `session_info_changed` | Tracked internally | Deferred |
+| `extension_ui_request` | Not yet translated | Permission/question/UI sidecar translation |
+| `extension_error` / `error` | Not yet translated | Deferred |
+
+> Note: `entry_appended` fires only for extension custom entries (Pi does not
+> broadcast it for normal `appendMessage` paths). Durable alias binding happens
+> via the `get_entries` reconciliation pass on `agent_settled`, matched by
+> accumulated content.
 
 ## Phase 2A OpenCode conversion status
 
@@ -71,12 +82,12 @@ the corresponding translation is designed and tested.
 
 | OpenCode contract | Phase 2A status | Notes |
 |---|---:|---|
-| Session list/create/get/delete | Partially implemented | Active read-only list/get uses Pi session manager; create/delete remain deferred |
+| Session list/create/get/delete | **implemented** | List/get uses Pi session manager; create provisions live Pi RPC process; delete removes process, session file, aliases, and publishes SSE |
 | Session messages/history | Partially implemented | Active branch history is converted from Pi durable entries; full alias reconciliation remains deferred |
 | Durable message history | **implemented** | Active Pi branch order is encoded in lexicographically sortable OpenCode IDs; tool-loop assistant records are projected under their initiating user turn. |
-| Session prompt and abort | Planned | Use `prompt`/`abort`, then convert stdout events to SSE |
-| `/api/event` and `/api/global/event` SSE | Partially implemented | Pi internal `/event` and `/global/event` endpoints emit the accepted `server.connected` envelope and heartbeats through the existing proxy; live Pi translation/replay remains deferred |
-| Session status | Planned | Must use live Pi events; `agent_end` alone is insufficient |
+| Session prompt and abort | **implemented** | Gateway sends `prompt` RPC (via prompt_async accepting SDK parts[] body, supports image-only) and `abort` RPC; prompt returns 204 No Content (matches SDK `SessionPromptAsyncResponses`); abort returns `true`; events stream through translator |
+| `/api/event` and `/api/global/event` SSE | **implemented** | Pi internal `/event` and `/global/event` endpoints emit `server.connected` envelope plus translated live agent events (message.*, session.*, tool.*) through the gateway's SSE broadcaster |
+| Session status | **implemented** | `agent_start` → `session.status` (busy), `agent_settled` → `session.idle`; `/session/status` also queries process manager busy state |
 | Models/providers/config | **implemented** | Pi `ModelRuntime.getAvailable()` supplies authenticated selectable models; provider names come from Pi APIs; gateway defaults are deterministic and catalog failure is not an empty success. |
 | Permissions/questions | Planned | Evaluate `extension_ui_request` and sidecar pending state |
 | Todos/MCP/plugins/OpenCode commands | Planned or explicit unsupported | No guessed Pi command names; sidecar only where ownership is clear |
@@ -95,11 +106,11 @@ Pi message has no durable entry id yet. Bind aliases only after `agent_settled`
 reconciliation, since Pi persistence follows public `message_end` and event
 receipt does not prove JSONL durability.
 
-## Explicitly not implemented in Phase 2B
+## Explicitly not implemented in Phase 3
 
-- Live Pi event translation/replay, prompt streaming, and mutation adapters.
-- Archived session listing and live OpenCode-to-Pi alias binding/reconciliation.
+- Permission/question translation from `extension_ui_request` events.
+- Session update/archive/fork/title mutation routes.
+- `packages/ui` SSE integration to consume live status events during generation.
+- Archived session listing (requires durable alias binding for history).
 - OpenCode SDK changes.
-- Model/provider/config/MCP/permission/question emulation.
-- Session mutation, prompt streaming, abort, and message persistence mapping.
 
