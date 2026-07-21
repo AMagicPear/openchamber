@@ -2,6 +2,7 @@ import { createPiCompatibilityGateway } from './gateway.js';
 import { createPiRpcProcessManager } from './rpc-process-manager.js';
 import { createPiSessionRepository } from './session-repository.js';
 import { createPiModelCatalog } from './model-catalog.js';
+import { createPiMessageAliasStore } from './message-alias-store.js';
 
 const HEALTH_PATH = '/global/health';
 const DEFAULT_HEALTH_TIMEOUT_MS = 5_000;
@@ -31,10 +32,12 @@ export function createPiGatewayLifecycleRuntime(dependencies = {}) {
     createRpcProcessManager = (options) => createPiRpcProcessManager(options),
     createSessionRepository = (options) => createPiSessionRepository(options),
     createModelCatalog = (options) => createPiModelCatalog(options),
+    createMessageAliasStore = (options) => createPiMessageAliasStore(options),
     createCompatibilityGateway = (options) => createPiCompatibilityGateway(options),
     rpcProcessManagerOptions = {},
     sessionRepositoryOptions = {},
     modelCatalogOptions = {},
+    messageAliasStoreOptions = {},
     gatewayOptions = {},
     fetchImpl = fetch,
     healthTimeoutMs = DEFAULT_HEALTH_TIMEOUT_MS,
@@ -94,12 +97,17 @@ export function createPiGatewayLifecycleRuntime(dependencies = {}) {
     }
   };
 
-  const closeResources = async ({ gateway, processManager }) => {
+  const closeResources = async ({ gateway, messageAliasStore, processManager }) => {
     let firstError = null;
     try {
       await gateway?.close?.();
     } catch (error) {
       firstError = error;
+    }
+    try {
+      await messageAliasStore?.close?.();
+    } catch (error) {
+      firstError ||= error;
     }
     try {
       await processManager?.shutdown?.();
@@ -132,11 +140,13 @@ export function createPiGatewayLifecycleRuntime(dependencies = {}) {
     const processManager = createRpcProcessManager({ ...rpcProcessManagerOptions });
     const sessionRepository = createSessionRepository({ ...sessionRepositoryOptions });
     const modelCatalog = createModelCatalog({ ...modelCatalogOptions });
+    const messageAliasStore = createMessageAliasStore({ ...messageAliasStoreOptions });
     const gateway = createCompatibilityGateway({
       ...gatewayOptions,
       processManager,
       sessionRepository,
       modelCatalog,
+      messageAliasStore,
       defaultDirectory: state.openCodeWorkingDirectory || process.cwd(),
     });
 
@@ -157,7 +167,7 @@ export function createPiGatewayLifecycleRuntime(dependencies = {}) {
         closePromise: null,
         close() {
           if (!this.closePromise) {
-            this.closePromise = closeResources({ gateway, processManager });
+            this.closePromise = closeResources({ gateway, messageAliasStore, processManager });
           }
           return this.closePromise;
         },
@@ -169,7 +179,7 @@ export function createPiGatewayLifecycleRuntime(dependencies = {}) {
       return handle;
     } catch (error) {
       if (!started) {
-        await closeResources({ gateway, processManager }).catch(() => {});
+        await closeResources({ gateway, messageAliasStore, processManager }).catch(() => {});
       }
       state.lastOpenCodeError = error instanceof Error ? error.message : String(error);
       clearGatewayState();

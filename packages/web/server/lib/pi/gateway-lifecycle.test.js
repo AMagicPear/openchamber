@@ -25,21 +25,28 @@ function createRuntime(overrides = {}) {
   const state = createState();
   const managers = [];
   const gateways = [];
+  const aliasStores = [];
+  const closeOrder = [];
   const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ healthy: true }) }));
   const runtime = createPiGatewayLifecycleRuntime({
     state,
     fetchImpl,
     createRpcProcessManager: vi.fn(() => {
-      const manager = { shutdown: vi.fn(async () => {}) };
+      const manager = { shutdown: vi.fn(async () => { closeOrder.push('process-manager'); }) };
       managers.push(manager);
       return manager;
     }),
     createSessionRepository: vi.fn(() => ({})),
+    createMessageAliasStore: vi.fn(() => {
+      const store = { close: vi.fn(async () => { closeOrder.push('message-alias-store'); }) };
+      aliasStores.push(store);
+      return store;
+    }),
     createCompatibilityGateway: vi.fn(() => {
       const port = 4000 + gateways.length;
       const gateway = {
         start: vi.fn(async () => ({ url: `http://127.0.0.1:${port}`, port })),
-        close: vi.fn(async () => {}),
+        close: vi.fn(async () => { closeOrder.push('gateway'); }),
       };
       gateways.push(gateway);
       return gateway;
@@ -51,12 +58,12 @@ function createRuntime(overrides = {}) {
     healthFailureLimit: 5,
     ...overrides,
   });
-  return { runtime, state, managers, gateways, fetchImpl: overrides.fetchImpl || fetchImpl };
+  return { runtime, state, managers, gateways, aliasStores, closeOrder, fetchImpl: overrides.fetchImpl || fetchImpl };
 }
 
 describe('Pi gateway lifecycle', () => {
-  it('starts with fresh resources, proves health, and closes gateway before RPC manager', async () => {
-    const { runtime, state, managers, gateways } = createRuntime();
+  it('starts with fresh resources, proves health, and closes gateway, aliases, then RPC manager idempotently', async () => {
+    const { runtime, state, managers, gateways, aliasStores, closeOrder } = createRuntime();
     const handle = await runtime.startOpenCode();
 
     expect(handle).toMatchObject({ backend: 'pi', pid: null, url: 'http://127.0.0.1:4000' });
@@ -65,7 +72,43 @@ describe('Pi gateway lifecycle', () => {
     await handle.close();
     await handle.close();
     expect(gateways[0].close).toHaveBeenCalledTimes(1);
+    expect(aliasStores[0].close).toHaveBeenCalledTimes(1);
     expect(managers[0].shutdown).toHaveBeenCalledTimes(1);
+    expect(closeOrder).toEqual(['gateway', 'message-alias-store', 'process-manager']);
+  });
+
+  it('creates a fresh alias store and passes it to every new gateway', async () => {
+    const { runtime, aliasStores, gateways } = createRuntime();
+    const gatewayOptions = [];
+    gateways.length = 0;
+    const createGateway = vi.fn((options) => {
+      gatewayOptions.push(options);
+      const port = 4100 + gatewayOptions.length;
+      const gateway = {
+        start: vi.fn(async () => ({ url: `http://127.0.0.1:${port}`, port })),
+        close: vi.fn(async () => {}),
+      };
+      gateways.push(gateway);
+      return gateway;
+    });
+    const runtimeWithGateway = createPiGatewayLifecycleRuntime({
+      state: createState(),
+      fetchImpl: vi.fn(async () => ({ ok: true, json: async () => ({ healthy: true }) })),
+      createRpcProcessManager: vi.fn(() => ({ shutdown: vi.fn(async () => {}) })),
+      createSessionRepository: vi.fn(() => ({})),
+      createMessageAliasStore: vi.fn(() => {
+        const store = { close: vi.fn(async () => {}) };
+        aliasStores.push(store);
+        return store;
+      }),
+      createCompatibilityGateway: createGateway,
+    });
+    await runtimeWithGateway.startOpenCode();
+    await runtimeWithGateway.restartOpenCode();
+
+    expect(aliasStores).toHaveLength(2);
+    expect(gatewayOptions[0].messageAliasStore).toBe(aliasStores[0]);
+    expect(gatewayOptions[1].messageAliasStore).toBe(aliasStores[1]);
   });
 
   it('reuses a genuinely healthy existing handle during bootstrap', async () => {

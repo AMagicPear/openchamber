@@ -34,6 +34,13 @@ function repositoryHarness() {
 }
 
 describe('Pi compatibility gateway', () => {
+  it('rejects an explicitly supplied invalid message alias store', () => {
+    expect(() => createPiCompatibilityGateway({
+      sessionRepository: repositoryHarness(),
+      messageAliasStore: {},
+    })).toThrow('messageAliasStore is invalid');
+  });
+
   it('serves connected SSE envelopes, heartbeats, and closes live streams', async () => {
     const gateway = createPiCompatibilityGateway({
       sessionRepository: repositoryHarness(),

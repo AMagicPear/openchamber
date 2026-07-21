@@ -103,6 +103,13 @@ function writeSseChunk(client, value) {
  */
 export function createPiCompatibilityGateway(options = {}) {
   if (!options.sessionRepository) throw new TypeError('sessionRepository is required');
+  if (options.messageAliasStore !== undefined) {
+    const store = options.messageAliasStore;
+    const methods = ['get', 'listSession', 'upsert', 'removeSession', 'close'];
+    if (!store || methods.some((method) => typeof store[method] !== 'function')) {
+      throw new TypeError('messageAliasStore is invalid');
+    }
+  }
   const repository = options.sessionRepository;
   const defaultDirectory = options.defaultDirectory || process.cwd();
   const configProvider = options.configProvider || (() => ({}));

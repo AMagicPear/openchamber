@@ -85,7 +85,8 @@ the source of durable read-only history. No session content, stderr, credentials
 or local stack traces are logged or returned. `/permission` and `/question` return
 an authoritative empty list only because no pending-request store exists before
 live process/extension integration.
-Archived listing remains unsupported until the persistent alias sidecar exists,
+Archived listing remains unsupported until live alias binding and settled
+reconciliation exist on top of the persistent sidecar,
 so Phase 2A does not claim complete UI bootstrap coverage.
 
 ## Phase 2B: selectable read-only Pi backend and gateway lifecycle
@@ -120,8 +121,8 @@ OpenCode and no shared UI or OpenCode SDK/event contract was changed.
 Pi agent-presence verification deliberately returns an unsupported error.
 Configuration refresh may restart the gateway but does not claim agent
 verification. Archived listing, prompt/session mutations,
-permissions/questions, live Pi event translation/replay, persistent message
-aliasing, and full UI bootstrap remain absent. Phase 2B is not a full UI
+permissions/questions, live Pi event translation/replay, live message alias
+binding, and full UI bootstrap remain absent. Phase 2B is not a full UI
 bootstrap claim.
 
 ### Phase 2D: model and agent bootstrap
@@ -157,9 +158,30 @@ Status: implemented as a corrective read-only history translation.
 ### Remaining Phase 2C+ work
 
 Prompt forwarding, live SSE/event translation, abort, live status reconciliation,
-provider auth mutation, and the persistent optimistic/live message alias
-sidecar remain deferred. Durable read-only ids are provisional until that
-aliasing and `agent_settled` reconciliation is implemented.
+provider auth mutation, and optimistic/live message alias binding remain deferred.
+Durable read-only ids are provisional until that binding and `agent_settled`
+reconciliation is implemented on top of the storage foundation.
+
+## Phase 3 prerequisite: durable message alias storage
+
+Status: storage foundation implemented; live reservation and reconciliation remain
+pending.
+
+### Added
+
+- `packages/web/server/lib/pi/message-alias-store.js` and focused tests provide a
+  versioned, atomic, mode-restricted alias sidecar with strict validation,
+  caller-side SHA-256 content hashing, serialized mutations, restart loading,
+  and session removal.
+- `gateway-lifecycle.js` creates a fresh alias store for each Pi start, passes it
+  through to the gateway, and closes it after the gateway and before the RPC
+  process manager. The gateway validates the optional store contract but does
+  not consume it yet.
+
+`reservePrompt` is deliberately not implemented: live Pi messages do not yet
+have durable entry ids. Alias binding must happen only after `agent_settled`
+reconciliation in the later event-translation commit. Prompt forwarding,
+session mutation, RPC event translation, and `packages/ui` remain unchanged.
 
 ## Phase 2C: Pi project discovery in settings responses
 

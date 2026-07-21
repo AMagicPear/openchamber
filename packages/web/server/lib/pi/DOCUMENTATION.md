@@ -106,13 +106,28 @@ Phase 2A adds three intentionally standalone modules:
   start. In Phase 2B it is registered only by the Pi lifecycle and reached
   through the existing OpenChamber proxy.
 
-Durable history ids in this phase are provisional. Phase 3 must add the persistent
-OpenCode/live-to-Pi alias sidecar and settled reconciliation before prompt and SSE
-flows can claim complete identity parity. `/permission` and `/question` currently
+Durable history ids in this phase are provisional. Phase 3 must add live
+OpenCode/live-to-Pi alias binding and settled reconciliation on top of the
+persistent sidecar before prompt and SSE flows can claim complete identity parity.
+`/permission` and `/question` currently
 return `[]` because the pending-request store is authoritatively empty before live
 Pi processes/extensions exist; this is not an archive or failure fallback.
-Archived listing remains unsupported until the persistent alias sidecar exists.
+Archived listing remains unsupported until alias binding and settled reconciliation
+exist on top of the storage foundation.
 Phase 2A is therefore not a complete UI bootstrap claim.
+
+## Durable message alias storage foundation
+
+`message-alias-store.js` owns the versioned `pi-message-aliases.json` sidecar.
+It validates the strict `{ version: 1, aliases: [...] }` schema, rejects
+malformed or payload-bearing records, returns copies, serializes all
+read-modify-write operations, and uses atomic mode-restricted snapshots. The
+store is created per Pi lifecycle start and closed after the gateway and before
+the RPC process manager. It currently provides storage only: `reservePrompt` is
+intentionally absent because a live Pi message has no durable entry id yet.
+Alias binding belongs after `agent_settled` reconciliation in the later
+event-translation commit; no prompt, session mutation, or live event
+translation depends on this foundation yet.
 
 ## Phase 2B: backend selector and lifecycle
 

@@ -56,7 +56,7 @@ passes an executable and argument array and never shell-interpolates them.
 | `/session` pagination | **implemented** | Uses the installed SDK's independent `start` query; it is not the experimental cursor contract. |
 | Message and ToolPart conversion | **implemented** | Visible Pi branch messages use ordinal-prefixed durable entry ids; tool results merge only with matching calls. |
 | Assistant usage and failures | **implemented** | Maps Pi input/output/reasoning/cache/total/cost values; aborted maps to `MessageAbortedError`, error maps to `UnknownError`. |
-| Archived session listing | **unsupported** | Deferred until the persistent alias sidecar exists. |
+| Archived session listing | **unsupported** | Deferred until live alias binding and settled reconciliation exist on top of the persistent sidecar. |
 
 Phase 2A is a read-only active catalog/history compatibility layer, not a
 complete UI bootstrap claim. It remains isolated from lifecycle, proxy, index,
@@ -85,15 +85,20 @@ the corresponding translation is designed and tested.
 
 | Settings project discovery | **implemented** | Pi `SessionManager.listAll()` cwd values are normalized to absolute paths, deduplicated in newest-first order, and mapped with OpenChamber `createProjectIdFromPath`; existing metadata/order and `activeProjectId` win, and discovered entries are response-only. Stable timestamps use session `created`/`modified` values. Temporary/unavailable-directory filtering and hide semantics are deferred. |
 
-**Planned:** persist an alias map from OpenCode UI `messageID` and live synthetic
-IDs to Pi durable entry IDs. Do not use response correlation IDs as durable entry
-IDs. Reconcile after `agent_settled`, since Pi persistence follows public
-`message_end` and event receipt does not prove JSONL durability.
+**Implemented storage foundation:** `message-alias-store.js` persists a strict,
+versioned alias map from OpenCode UI `messageID` to Pi durable `entryID`, with
+session scoping, SHA-256 content hashes, atomic writes, and explicit malformed
+storage failures. Do not use response correlation IDs as durable entry IDs.
+
+**Planned live binding:** `reservePrompt` is intentionally absent because a live
+Pi message has no durable entry id yet. Bind aliases only after `agent_settled`
+reconciliation, since Pi persistence follows public `message_end` and event
+receipt does not prove JSONL durability.
 
 ## Explicitly not implemented in Phase 2B
 
 - Live Pi event translation/replay, prompt streaming, and mutation adapters.
-- Archived session listing and persistent OpenCode/live-to-Pi aliasing.
+- Archived session listing and live OpenCode-to-Pi alias binding/reconciliation.
 - OpenCode SDK changes.
 - Model/provider/config/MCP/permission/question emulation.
 - Session mutation, prompt streaming, abort, and message persistence mapping.
