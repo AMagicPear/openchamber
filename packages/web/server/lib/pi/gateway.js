@@ -64,6 +64,22 @@ function sortSessions(sessions) {
   });
 }
 
+/** Hide sessions whose cwd is an obvious temporary directory. */
+function shouldHideCwd(cwd) {
+  if (!cwd) return false;
+  const resolved = path.resolve(cwd);
+  const segs = resolved.split(path.sep).filter(Boolean);
+  // macOS per-user temp:
+  //   /var/folders/<XX>/<UUID>/T/...          → segs[0]=var,    segs[4]=T
+  //   /private/var/folders/<XX>/<UUID>/T/...  → segs[0]=private, segs[5]=T
+  return (segs.at(0) === 'var' && segs.at(1) === 'folders' && segs.at(4) === 'T')
+    || (segs.at(0) === 'private' && segs.at(1) === 'var' && segs.at(2) === 'folders' && segs.at(5) === 'T');
+}
+
+function filterSessions(sessions) {
+  return sessions.filter((s) => !shouldHideCwd(s.cwd));
+}
+
 function sendJson(res, value) {
   res.type('application/json').send(value);
 }
@@ -275,9 +291,9 @@ export function createPiCompatibilityGateway(options = {}) {
     const start = !global && req.query.start !== undefined
       ? integerQuery(req.query.start, 'start', 0, Number.MAX_SAFE_INTEGER)
       : 0;
-    let sessions = global ? await repository.list({ directory }) : await repository.list({ directory: directory || undefined });
+    let sessions = global ? await repository.listAll() : await repository.list({ directory });
     sessions = sessions.map(normalizePiSessionInfo);
-    sessions = sortSessions(searchSessions(sessions, req.query.search));
+    sessions = filterSessions(sortSessions(searchSessions(sessions, req.query.search)));
     if (roots === true) sessions = sessions.filter((session) => !session.parentSessionPath);
     if (global && cursor !== undefined) {
       sessions = sessions.filter((session) => session.modified.getTime() < cursor);
