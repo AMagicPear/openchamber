@@ -4,7 +4,7 @@ import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
 import { createPiCompatibilityGateway } from './gateway.js';
 
-const directory = '/tmp';
+const directory = '/Users/amagicpear/projects/pichamber-plans/openchamber';
 const sessions = [
   {
     id: 'session-new', path: '/sessions/new.jsonl', cwd: directory, name: 'New', created: new Date(2), modified: new Date(20),
@@ -84,7 +84,7 @@ describe('Pi compatibility gateway', () => {
     const started = await gateway.start();
     const chunks = [];
     const response = await new Promise((resolve, reject) => {
-      const request = http.get(`${started.url}/event?directory=%2Ftmp`, (res) => {
+      const request = http.get(`${started.url}/event?directory=${encodeURIComponent(directory)}`, (res) => {
         res.setEncoding('utf8');
         res.on('data', (chunk) => chunks.push(chunk));
         res.once('error', reject);
@@ -96,7 +96,7 @@ describe('Pi compatibility gateway', () => {
     expect(response.headers['content-type']).toContain('text/event-stream');
     expect(response.headers['cache-control']).toContain('no-cache');
     expect(chunks.join('')).toContain('event: server.connected');
-    expect(chunks.join('')).toContain('"directory":"/tmp"');
+    expect(chunks.join('')).toContain('"directory":"' + directory + '"');
     expect(chunks.join('')).toContain(': heartbeat');
 
     const closed = new Promise((resolve) => response.once('close', resolve));
@@ -116,8 +116,8 @@ describe('Pi compatibility gateway', () => {
     expect(health.body).toMatchObject({ healthy: true, version: expect.any(String) });
     await request(gateway.app).get('/opencode/health').expect(200);
     await request(gateway.app).get('/path').expect(200).expect(({ body }) => expect(body.directory).toBe(directory));
-    await request(gateway.app).get('/config?directory=%2Ftmp').expect(200).expect(({ body }) => expect(body.$schema).toContain('opencode'));
-    await request(gateway.app).get('/project/current?directory=%2Ftmp').expect(200).expect(({ body }) => expect(body.worktree).toBe(directory));
+    await request(gateway.app).get(`/config?directory=${encodeURIComponent(directory)}`).expect(200).expect(({ body }) => expect(body.$schema).toContain('opencode'));
+    await request(gateway.app).get(`/project/current?directory=${encodeURIComponent(directory)}`).expect(200).expect(({ body }) => expect(body.worktree).toBe(directory));
     await request(gateway.app).get('/experimental/session?limit=1').expect(200).expect(({ body, headers }) => {
       expect(body).toHaveLength(1);
       expect(headers['x-next-cursor']).toBe('20');
@@ -141,7 +141,7 @@ describe('Pi compatibility gateway', () => {
     });
     const started = await gateway.start();
     const globalStream = await openSse(`${started.url}/global/event`);
-    const directoryStream = await openSse(`${started.url}/event?directory=%2Ftmp`);
+    const directoryStream = await openSse(`${started.url}/event?directory=${encodeURIComponent(directory)}`);
     const client = createOpencodeClient({ baseUrl: started.url });
 
     const result = await client.session.create({ directory });
@@ -166,7 +166,7 @@ describe('Pi compatibility gateway', () => {
     expect(globalText).toContain('id: 1');
     expect(directoryText).toContain('id: 1');
     expect(globalText).toContain('"id":"fresh-session"');
-    expect(globalText).not.toContain('directory=%2Ftmp');
+    expect(globalText).not.toContain(`directory=${encodeURIComponent(directory)}`);
 
     globalStream.response.destroy();
     directoryStream.response.destroy();
@@ -198,12 +198,12 @@ describe('Pi compatibility gateway', () => {
     const liveSessions = liveSessionHarness();
     const gateway = createPiCompatibilityGateway({ sessionRepository: repository, liveSessionRegistry: liveSessions, defaultDirectory: directory });
 
-    await request(gateway.app).post('/session?directory=%2Ftmp').expect(200).expect(({ body }) => {
+    await request(gateway.app).post(`/session?directory=${encodeURIComponent(directory)}`).expect(200).expect(({ body }) => {
       expect(body.id).toBe('fresh-session');
     });
     // File-first lookup: getSession is tried, returns undefined (not in catalog),
     // then falls back to the live binding.
-    await request(gateway.app).get('/session/fresh-session?directory=%2Ftmp').expect(200);
+    await request(gateway.app).get(`/session/fresh-session?directory=${encodeURIComponent(directory)}`).expect(200);
     expect(repository.getSession).toHaveBeenCalled();
     expect(liveSessions.create).toHaveBeenCalledOnce();
   });
@@ -257,7 +257,7 @@ describe('Pi compatibility gateway', () => {
       expect(body.error.message).toBe('gateway request failed');
       expect(JSON.stringify(body)).not.toContain('secret');
     });
-    await request(gateway.app).get('/session/status?directory=%2Ftmp').expect(200).expect(({ body }) => {
+    await request(gateway.app).get(`/session/status?directory=${encodeURIComponent(directory)}`).expect(200).expect(({ body }) => {
       expect(body).toEqual({ 'session-new': { type: 'busy' } });
     });
     await request(gateway.app).get('/command').expect(501);
