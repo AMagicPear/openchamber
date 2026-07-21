@@ -76,12 +76,52 @@ describe('Pi OpenCode shape conversion', () => {
     ], { sessionId: 'pi-session', directory: '/workspace/project' });
 
     expect(records).toHaveLength(2);
-    expect(records[0].info.id).toBe('msg_user-entry');
-    expect(records[0].parts[1]).toMatchObject({ id: 'prt_user-entry_1', type: 'file', url: 'data:image/png;base64,abc' });
-    expect(records[1].info.parentID).toBe('msg_user-entry');
+    expect(records[0].info.id).toBe('msg_000000000000_user-entry');
+    expect(records[0].parts[1]).toMatchObject({ id: 'prt_000000000000_000000000001_user-entry', type: 'file', url: 'data:image/png;base64,abc' });
+    expect(records[1].info.parentID).toBe('msg_000000000000_user-entry');
     expect(records[1].parts.map((part) => part.type)).toEqual(['reasoning', 'tool', 'text']);
     expect(records[1].parts[1].state).toMatchObject({ status: 'completed', output: 'file contents' });
-    expect(records[1].parts[1].id).toBe('prt_assistant-entry_1');
+    expect(records[1].parts[1].id).toBe('prt_000000000001_000000000001_assistant-entry');
+  });
+
+  it('uses chronological ids and groups every tool-loop assistant under its initiating user', () => {
+    const records = piBranchToOpenCodeMessages([
+      { type: 'message', id: 'z-first-user', parentId: null, message: {
+        role: 'user', timestamp: 1, content: 'inspect this',
+      } },
+      { type: 'message', id: 'a-first-assistant', parentId: 'z-first-user', message: {
+        role: 'assistant', timestamp: 2, provider: 'p', model: 'm', usage: {}, stopReason: 'toolUse',
+        content: [{ type: 'toolCall', id: 'first-call', name: 'read', arguments: {} }],
+      } },
+      { type: 'message', id: 'y-first-result', parentId: 'a-first-assistant', message: {
+        role: 'toolResult', timestamp: 3, toolCallId: 'first-call', toolName: 'read', content: 'first result', isError: false,
+      } },
+      { type: 'message', id: 'b-second-assistant', parentId: 'y-first-result', message: {
+        role: 'assistant', timestamp: 4, provider: 'p', model: 'm', usage: {}, stopReason: 'toolUse',
+        content: [{ type: 'toolCall', id: 'second-call', name: 'search', arguments: {} }],
+      } },
+      { type: 'message', id: 'x-second-result', parentId: 'b-second-assistant', message: {
+        role: 'toolResult', timestamp: 5, toolCallId: 'second-call', toolName: 'search', content: 'second result', isError: false,
+      } },
+      { type: 'message', id: 'c-final-assistant', parentId: 'x-second-result', message: {
+        role: 'assistant', timestamp: 6, provider: 'p', model: 'm', usage: {}, stopReason: 'stop',
+        content: Array.from({ length: 11 }, (_value, index) => ({ type: 'text', text: `part ${index}` })),
+      } },
+    ], { sessionId: 'pi-session', directory: '/workspace/project' });
+
+    const [user, firstAssistant, secondAssistant, finalAssistant] = records;
+    expect(records.map((record) => record.info.id)).toEqual([...records]
+      .sort((left, right) => left.info.id.localeCompare(right.info.id))
+      .map((record) => record.info.id));
+    expect([firstAssistant, secondAssistant, finalAssistant].map((record) => record.info.parentID)).toEqual([
+      user.info.id, user.info.id, user.info.id,
+    ]);
+    expect(firstAssistant.parts[0].state).toMatchObject({ status: 'completed', output: 'first result' });
+    expect(secondAssistant.parts[0].state).toMatchObject({ status: 'completed', output: 'second result' });
+    expect(finalAssistant.parts.map((part) => part.id)).toEqual([...finalAssistant.parts]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((part) => part.id));
+    expect(finalAssistant.parts[10].text).toBe('part 10');
   });
 
   it('keeps missing tool results pending and ignores unrelated results', () => {
@@ -112,7 +152,7 @@ describe('Pi OpenCode shape conversion', () => {
       } },
     ], { sessionId: 'pi-session', directory: '/workspace/project' });
 
-    expect(records[0].info.parentID).toBe('msg_missing-user');
+    expect(records[0].info.parentID).toBe('msg_000000000001_missing-user');
     expect(records[0].info.parentID).not.toBe(records[0].info.id);
     expect(records[0].info.error).toEqual({ name: 'MessageAbortedError', data: { message: 'cancelled' } });
     expect(records[0].info.cost).toBe(10);

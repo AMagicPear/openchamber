@@ -58,7 +58,8 @@ existing OpenCode lifecycle, proxy, server index, and `packages/ui`.
   errors and preserve the prior cache.
 - `packages/web/server/lib/pi/opencode-shapes.js` and focused tests:
   pure conversion to OpenCode 1.17.18 Session/GlobalSession, Project, Path, and
-  message records. Durable Pi entry ids produce stable OpenCode message/part ids;
+  message records. Active-branch ordinal-prefixed Pi entry ids produce stable,
+  lexicographically chronological OpenCode message/part ids;
   project ids use SHA-256 of normalized cwd; parent session paths resolve through
   the repository index; tool results merge into matching ToolParts.
 - `packages/web/server/lib/pi/gateway.js` and focused supertest/SDK smoke tests:
@@ -140,6 +141,18 @@ mutation.
   auth values, headers, environment values, or Pi request config are exposed.
 - The `pi` agent is one native primary agent solely for OpenChamber's required
   selection contract. Pi subagents are not synthesized.
+
+### Phase 2E: durable history turn projection
+
+Status: implemented as a corrective read-only history translation.
+
+- Pi durable entry IDs are not chronological. The gateway now prefixes each
+  message and part ID with a fixed-width active-branch ordinal so OpenChamber's
+  existing lexicographic history ordering keeps the Pi root-to-leaf order.
+- Pi tool loops form an execution tree (`assistant -> tool result -> assistant`),
+  whereas OpenChamber renders every assistant record under a direct user parent.
+  The converter now projects every assistant after a visible user into that
+  user's turn, without changing Pi's durable tree or branch selection.
 
 ### Remaining Phase 2C+ work
 

@@ -85,12 +85,16 @@ Phase 2A adds three intentionally standalone modules:
   explicit. A global lookup rejects duplicate Pi session ids across directories;
   callers must provide a directory instead of silently opening the wrong session.
 - `opencode-shapes.js` is a pure Pi-to-OpenCode 1.17.18 conversion boundary. It
-  uses Pi durable entry ids (`msg_<entry-id>` and
-  `prt_<entry-id>_<content-index>`), SHA-256 project ids, Pi `VERSION`, active
-  branch entries, and parent-session path resolution through the catalog index.
-  Compaction, branch summary, and other non-message entries are omitted. Tool
-  results merge into matching assistant ToolParts; unmatched or missing results do
-  not remove unrelated records.
+  uses a fixed-width active-branch ordinal plus the Pi durable entry id for
+  message and part IDs, so OpenChamber's lexicographic history ordering remains
+  root-to-leaf chronological. Each assistant record after a visible user is
+  parented to that user for OpenChamber turn projection; this deliberately
+  differs from Pi's execution-tree parentage during tool loops. It otherwise
+  uses SHA-256 project ids, Pi `VERSION`, active branch entries, and
+  parent-session path resolution through the catalog index. Compaction, branch
+  summary, and other non-message entries are omitted. Tool results merge into
+  matching assistant ToolParts; unmatched or missing results do not remove
+  unrelated records.
 - `gateway.js` creates an Express app plus an optional ephemeral loopback listener.
   It exposes only read-only OpenCode-shaped bootstrap/history routes, validates
   explicit absolute existing directories, returns generic structured errors, and

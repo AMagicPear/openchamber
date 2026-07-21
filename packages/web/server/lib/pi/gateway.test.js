@@ -86,7 +86,30 @@ describe('Pi compatibility gateway', () => {
     await request(gateway.app).get('/session?start=1&limit=1').expect(200).expect(({ body }) => expect(body[0]).toMatchObject({ id: 'session-old' }));
     await request(gateway.app).get('/session?cursor=1&limit=1').expect(200).expect(({ body }) => expect(body[0]).toMatchObject({ id: 'session-new' }));
     await request(gateway.app).get('/session/session-new').expect(200).expect(({ body }) => expect(body.id).toBe('session-new'));
-    await request(gateway.app).get('/session/session-new/message').expect(200).expect(({ body }) => expect(body[0].info.id).toBe('msg_user-entry'));
+    await request(gateway.app).get('/session/session-new/message').expect(200).expect(({ body }) => expect(body[0].info.id).toBe('msg_000000000000_user-entry'));
+  });
+
+  it('paginates chronologically projected history despite non-chronological Pi entry ids', async () => {
+    const repository = repositoryHarness();
+    repository.getActiveBranch.mockResolvedValue({
+      info: sessions[0],
+      entries: [
+        { type: 'message', id: 'z-user', parentId: null, message: { role: 'user', timestamp: 1, content: 'first' } },
+        { type: 'message', id: 'a-assistant', parentId: 'z-user', message: { role: 'assistant', timestamp: 2, provider: 'p', model: 'm', usage: {}, content: [{ type: 'text', text: 'first reply' }] } },
+        { type: 'message', id: 'y-user', parentId: 'a-assistant', message: { role: 'user', timestamp: 3, content: 'second' } },
+      ],
+    });
+    const gateway = createPiCompatibilityGateway({ sessionRepository: repository, defaultDirectory: directory });
+    const newest = await request(gateway.app).get('/session/session-new/message?limit=2').expect(200);
+    expect(newest.body.map((message) => message.info.id)).toEqual([
+      'msg_000000000001_a-assistant',
+      'msg_000000000002_y-user',
+    ]);
+    expect(newest.headers['x-next-cursor']).toBe('msg_000000000001_a-assistant');
+    const oldest = await request(gateway.app)
+      .get(`/session/session-new/message?limit=2&before=${encodeURIComponent(newest.headers['x-next-cursor'])}`)
+      .expect(200);
+    expect(oldest.body.map((message) => message.info.id)).toEqual(['msg_000000000000_z-user']);
   });
 
   it('rejects malformed or nonexistent explicit directories and does not expose errors', async () => {

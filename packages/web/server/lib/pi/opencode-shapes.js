@@ -121,10 +121,20 @@ function textFromContent(content) {
     .join('\n');
 }
 
+const BRANCH_ORDER_WIDTH = 12;
+
+function branchOrder(index) {
+  return String(index).padStart(BRANCH_ORDER_WIDTH, '0');
+}
+
+function openCodeMessageId(entryId, entryOrder) {
+  return `msg_${entryOrder}_${entryId}`;
+}
+
 function contentParts(content, ids) {
   const values = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : [];
   return values.flatMap((part, index) => {
-    const id = `prt_${ids.entryId}_${index}`;
+    const id = `prt_${ids.entryOrder}_${branchOrder(index)}_${ids.entryId}`;
     if (part?.type === 'text') {
       return [{ id, sessionID: ids.sessionId, messageID: ids.messageId, type: 'text', text: String(part.text || '') }];
     }
@@ -198,15 +208,16 @@ export function piBranchToOpenCodeMessages(entries, options = {}) {
   const records = [];
   const toolCalls = new Map();
   const orphanResults = new Map();
-  let previousMessageId;
+  let currentUserMessageId;
   const durableMessageIds = new Map();
   let model = options.defaultModel || { providerID: 'pi', modelID: 'pi' };
 
-  for (const entry of entries || []) {
+  for (const [entryIndex, entry] of (entries || []).entries()) {
     if (!entry || entry.type !== 'message' || !entry.message) continue;
     const message = entry.message;
-    const messageId = `msg_${entry.id}`;
-    const ids = { entryId: entry.id, messageId, sessionId };
+    const entryOrder = branchOrder(entryIndex);
+    const messageId = openCodeMessageId(entry.id, entryOrder);
+    const ids = { entryId: entry.id, entryOrder, messageId, sessionId };
     const created = timestamp(message.timestamp, timestamp(entry.timestamp));
 
     if (message.role === 'toolResult') {
@@ -224,7 +235,7 @@ export function piBranchToOpenCodeMessages(entries, options = {}) {
         model,
       };
       records.push({ info, parts: contentParts(message.content, ids) });
-      previousMessageId = messageId;
+      currentUserMessageId = messageId;
       durableMessageIds.set(entry.id, messageId);
       continue;
     }
@@ -233,7 +244,7 @@ export function piBranchToOpenCodeMessages(entries, options = {}) {
     model = { providerID: message.provider || model.providerID, modelID: message.model || model.modelID };
     const parts = [];
     for (const [index, part] of (Array.isArray(message.content) ? message.content : []).entries()) {
-      const id = `prt_${entry.id}_${index}`;
+      const id = `prt_${entryOrder}_${branchOrder(index)}_${entry.id}`;
       if (part?.type === 'text') {
         parts.push({ id, sessionID: sessionId, messageID: messageId, type: 'text', text: String(part.text || '') });
       } else if (part?.type === 'thinking') {
@@ -270,9 +281,9 @@ export function piBranchToOpenCodeMessages(entries, options = {}) {
       }
     }
     const durableParentId = typeof entry.parentId === 'string' && entry.parentId !== entry.id
-      ? durableMessageIds.get(entry.parentId) || `msg_${entry.parentId}`
+      ? durableMessageIds.get(entry.parentId) || openCodeMessageId(entry.parentId, entryOrder)
       : undefined;
-    const parentID = previousMessageId || durableParentId;
+    const parentID = currentUserMessageId || durableParentId;
     records.push({
       info: {
         id: messageId,
@@ -292,7 +303,6 @@ export function piBranchToOpenCodeMessages(entries, options = {}) {
       },
       parts,
     });
-    previousMessageId = messageId;
     durableMessageIds.set(entry.id, messageId);
   }
   return records;

@@ -54,7 +54,7 @@ passes an executable and argument array and never shell-interpolates them.
 | Global session ordering | **implemented** | Newest `modified` first with deterministic id tie-break. |
 | `/experimental/session` pagination | **implemented** | `cursor` is a modified-time boundary (`modified < cursor`); equal-time boundary groups remain together and `x-next-cursor` strictly decreases. |
 | `/session` pagination | **implemented** | Uses the installed SDK's independent `start` query; it is not the experimental cursor contract. |
-| Message and ToolPart conversion | **implemented** | Visible Pi branch messages use durable entry ids; tool results merge only with matching calls. |
+| Message and ToolPart conversion | **implemented** | Visible Pi branch messages use ordinal-prefixed durable entry ids; tool results merge only with matching calls. |
 | Assistant usage and failures | **implemented** | Maps Pi input/output/reasoning/cache/total/cost values; aborted maps to `MessageAbortedError`, error maps to `UnknownError`. |
 | Archived session listing | **unsupported** | Deferred until the persistent alias sidecar exists. |
 
@@ -73,6 +73,7 @@ the corresponding translation is designed and tested.
 |---|---:|---|
 | Session list/create/get/delete | Partially implemented | Active read-only list/get uses Pi session manager; create/delete remain deferred |
 | Session messages/history | Partially implemented | Active branch history is converted from Pi durable entries; full alias reconciliation remains deferred |
+| Durable message history | **implemented** | Active Pi branch order is encoded in lexicographically sortable OpenCode IDs; tool-loop assistant records are projected under their initiating user turn. |
 | Session prompt and abort | Planned | Use `prompt`/`abort`, then convert stdout events to SSE |
 | `/api/event` and `/api/global/event` SSE | Partially implemented | Pi internal `/event` and `/global/event` endpoints emit the accepted `server.connected` envelope and heartbeats through the existing proxy; live Pi translation/replay remains deferred |
 | Session status | Planned | Must use live Pi events; `agent_end` alone is insufficient |
