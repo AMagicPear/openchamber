@@ -118,15 +118,33 @@ OpenCode and no shared UI or OpenCode SDK/event contract was changed.
 
 Pi agent-presence verification deliberately returns an unsupported error.
 Configuration refresh may restart the gateway but does not claim agent
-verification. Archived listing, models/providers, prompt/session mutations,
+verification. Archived listing, prompt/session mutations,
 permissions/questions, live Pi event translation/replay, persistent message
 aliasing, and full UI bootstrap remain absent. Phase 2B is not a full UI
 bootstrap claim.
 
+### Phase 2D: model and agent bootstrap
+
+Status: implemented as a read-only compatibility layer before prompt/session
+mutation.
+
+- `model-catalog.js` uses Pi's exported `ModelRuntime.create()` and
+  `ModelRegistry` APIs. Pi's `getAvailable()` result is the only selectable
+  model source, so unauthenticated models and providers are omitted.
+- Successful catalog snapshots are bounded-TTL cached and in-flight deduped;
+  failures throw and can be retried, and invalidation is explicit. Pi's
+  configurable offline/network and refresh timeout options are preserved.
+- The gateway now serves OpenCode 1.17.18 provider/config/agent bootstrap
+  shapes. It preserves injected config fields and adds a deterministic default
+  `provider/model` only after successful catalog initialization. No credentials,
+  auth values, headers, environment values, or Pi request config are exposed.
+- The `pi` agent is one native primary agent solely for OpenChamber's required
+  selection contract. Pi subagents are not synthesized.
+
 ### Remaining Phase 2C+ work
 
 Prompt forwarding, live SSE/event translation, abort, live status reconciliation,
-model/provider behavior, and the persistent optimistic/live message alias
+provider auth mutation, and the persistent optimistic/live message alias
 sidecar remain deferred. Durable read-only ids are provisional until that
 aliasing and `agent_settled` reconciliation is implemented.
 

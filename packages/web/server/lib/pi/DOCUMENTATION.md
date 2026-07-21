@@ -130,9 +130,27 @@ The gateway's read-only `/global/event` and `/event` endpoints emit an initial
 scoped endpoint, and send frequent comment heartbeats. They do not translate or
 replay live Pi events. Pi health monitoring probes only this in-process gateway,
 never external `OPENCODE_HOST`/`OPENCODE_PORT` endpoints and never runs the
-OpenCode orphan reaper. Agent-presence verification, archived listing,
-models/providers, prompt/session mutation, and live event translation remain
-unsupported.
+OpenCode orphan reaper. Agent-presence verification, archived listing, prompt/
+session mutation, and live event translation remain unsupported. Model/provider
+and primary-agent bootstrap are translated from Pi's authenticated catalog.
+
+## Phase 2D: model and agent bootstrap
+
+`model-catalog.js` creates Pi's exported `ModelRuntime` and uses its
+auth-filtered `getAvailable()` result, with `ModelRegistry` provider display
+metadata. It never serializes credentials, auth values, headers, environment
+values, or request configuration. Successful snapshots are cached for a
+bounded TTL, concurrent reads share one initialization, failures remain
+failures for retry, and `invalidate()` explicitly clears the snapshot.
+
+The gateway exposes OpenCode 1.17.18-compatible `GET /config/providers`,
+`GET /provider`, and `GET /agent` responses. `/config` and `/global/config`
+preserve the injected config object and add a deterministic `provider/model`
+default only after a successful catalog read. A zero-model result is a valid
+empty catalog when Pi authoritatively reports no authenticated models; runtime
+initialization or catalog failures are HTTP failures. The sole `pi` agent is a
+native primary-agent bridge for OpenChamber selection and does not represent
+Pi subagents.
 
 ## Pi project discovery for settings
 

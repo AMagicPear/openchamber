@@ -76,7 +76,7 @@ the corresponding translation is designed and tested.
 | Session prompt and abort | Planned | Use `prompt`/`abort`, then convert stdout events to SSE |
 | `/api/event` and `/api/global/event` SSE | Partially implemented | Pi internal `/event` and `/global/event` endpoints emit the accepted `server.connected` envelope and heartbeats through the existing proxy; live Pi translation/replay remains deferred |
 | Session status | Planned | Must use live Pi events; `agent_end` alone is insufficient |
-| Models/providers/config | Planned | Classify each field; do not synthesize authoritative empties on failure |
+| Models/providers/config | **implemented** | Pi `ModelRuntime.getAvailable()` supplies authenticated selectable models; provider names come from Pi APIs; gateway defaults are deterministic and catalog failure is not an empty success. |
 | Permissions/questions | Planned | Evaluate `extension_ui_request` and sidecar pending state |
 | Todos/MCP/plugins/OpenCode commands | Planned or explicit unsupported | No guessed Pi command names; sidecar only where ownership is clear |
 

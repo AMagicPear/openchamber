@@ -1,6 +1,7 @@
 import { createPiCompatibilityGateway } from './gateway.js';
 import { createPiRpcProcessManager } from './rpc-process-manager.js';
 import { createPiSessionRepository } from './session-repository.js';
+import { createPiModelCatalog } from './model-catalog.js';
 
 const HEALTH_PATH = '/global/health';
 const DEFAULT_HEALTH_TIMEOUT_MS = 5_000;
@@ -29,9 +30,11 @@ export function createPiGatewayLifecycleRuntime(dependencies = {}) {
     ensureOpenCodeApiPrefix,
     createRpcProcessManager = (options) => createPiRpcProcessManager(options),
     createSessionRepository = (options) => createPiSessionRepository(options),
+    createModelCatalog = (options) => createPiModelCatalog(options),
     createCompatibilityGateway = (options) => createPiCompatibilityGateway(options),
     rpcProcessManagerOptions = {},
     sessionRepositoryOptions = {},
+    modelCatalogOptions = {},
     gatewayOptions = {},
     fetchImpl = fetch,
     healthTimeoutMs = DEFAULT_HEALTH_TIMEOUT_MS,
@@ -128,10 +131,12 @@ export function createPiGatewayLifecycleRuntime(dependencies = {}) {
     if (state.openCodeProcess) await closeCurrentGateway();
     const processManager = createRpcProcessManager({ ...rpcProcessManagerOptions });
     const sessionRepository = createSessionRepository({ ...sessionRepositoryOptions });
+    const modelCatalog = createModelCatalog({ ...modelCatalogOptions });
     const gateway = createCompatibilityGateway({
       ...gatewayOptions,
       processManager,
       sessionRepository,
+      modelCatalog,
       defaultDirectory: state.openCodeWorkingDirectory || process.cwd(),
     });
 

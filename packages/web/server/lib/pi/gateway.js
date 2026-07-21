@@ -106,6 +106,7 @@ export function createPiCompatibilityGateway(options = {}) {
   const repository = options.sessionRepository;
   const defaultDirectory = options.defaultDirectory || process.cwd();
   const configProvider = options.configProvider || (() => ({}));
+  const modelCatalog = options.modelCatalog;
   const pathsProvider = options.pathsProvider || ((directory) => piDirectoryToPath(directory, { home: os.homedir() }));
   const vcsProvider = options.vcsProvider;
   const processManager = options.processManager;
@@ -165,8 +166,40 @@ export function createPiCompatibilityGateway(options = {}) {
   )));
 
   app.get('/path', route((req, res) => sendJson(res, pathsProvider(optionalDirectory(req, defaultDirectory)))));
-  app.get('/global/config', route(async (_req, res) => sendJson(res, await readConfig(configProvider))));
-  app.get('/config', route(async (req, res) => sendJson(res, await readConfig(configProvider, optionalDirectory(req, defaultDirectory)))));
+  async function configWithDefault(directory) {
+    const config = await readConfig(configProvider, directory);
+    if (!modelCatalog) return config;
+    const catalog = await modelCatalog.getSnapshot();
+    if (config.model || !catalog.defaultModel) return config;
+    return { ...config, model: catalog.defaultModel };
+  }
+
+  app.get('/global/config', route(async (_req, res) => sendJson(res, await configWithDefault())));
+  app.get('/config', route(async (req, res) => sendJson(res, await configWithDefault(optionalDirectory(req, defaultDirectory)))));
+
+  const providerList = async (_req, res) => {
+    if (!modelCatalog) throw fail(503, 'UpstreamError', 'model catalog unavailable');
+    const catalog = await modelCatalog.getSnapshot();
+    sendJson(res, { providers: catalog.providers, default: catalog.default });
+  };
+  app.get('/config/providers', route(providerList));
+  app.get('/provider', route(async (_req, res) => {
+    if (!modelCatalog) throw fail(503, 'UpstreamError', 'model catalog unavailable');
+    const catalog = await modelCatalog.getSnapshot();
+    sendJson(res, { all: catalog.providers, default: catalog.default, connected: catalog.connected });
+  }));
+
+  const piPrimaryAgent = {
+    name: 'pi',
+    description: 'Pi primary agent',
+    mode: 'primary',
+    native: true,
+    permission: [],
+    options: {},
+  };
+  const agentList = (_req, res) => sendJson(res, [piPrimaryAgent]);
+  app.get('/agent', agentList);
+  app.get('/app/agents', agentList);
 
   app.get('/project', route(async (req, res) => {
     const requested = req.query.directory === undefined ? undefined : directoryValue(req.query.directory);
