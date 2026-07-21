@@ -130,3 +130,25 @@ model/provider behavior, and the persistent optimistic/live message alias
 sidecar remain deferred. Durable read-only ids are provisional until that
 aliasing and `agent_settled` reconciliation is implemented.
 
+## Phase 2C: Pi project discovery in settings responses
+
+Status: implemented as a response-only settings augmentation for the Pi backend.
+
+### Added
+
+- `packages/web/server/lib/pi/project-discovery.js` calls Pi's installed
+  `SessionManager.listAll()` directly and derives unique absolute cwd projects
+  in Pi's newest-first catalog order.
+- Existing settings project metadata, order, and `activeProjectId` remain
+  authoritative. Discovered entries use the existing `createProjectIdFromPath`
+  helper and stable session-derived timestamps, and are never written to disk.
+- GET and PUT `/api/config/settings` responses use the augmenter only for
+  `OPENCHAMBER_BACKEND=pi`; OpenCode has no augmenter and retains its existing
+  response behavior.
+- Catalog failures produce non-success settings responses and never become an
+  empty authoritative project list.
+
+Temporary/unavailable-directory filtering and hide semantics are deferred, as
+requested. This phase prioritizes correctness and coverage of every valid Pi
+session cwd.
+

@@ -134,6 +134,21 @@ OpenCode orphan reaper. Agent-presence verification, archived listing,
 models/providers, prompt/session mutation, and live event translation remain
 unsupported.
 
+## Pi project discovery for settings
+
+`project-discovery.js` augments the formatted `/api/config/settings` GET and PUT
+responses when `OPENCHAMBER_BACKEND=pi`. It calls the installed Pi
+`SessionManager.listAll()` catalog, collects unique absolute `SessionInfo.cwd`
+values in Pi's newest-first order, and creates normal OpenChamber project
+entries with `createProjectIdFromPath`. Existing settings entries retain their
+metadata and order; discovered entries are response-only and never persisted.
+Their timestamps come from session `created`/`modified` values, avoiding
+`Date.now()` churn. Catalog failure remains an HTTP failure rather than an
+authoritative settings response with missing projects.
+
+Temporary/unavailable-directory filtering and user-facing hide semantics are
+intentionally deferred. This phase prioritizes complete catalog coverage.
+
 ## Phase boundary
 
 The future Compatibility Gateway will translate OpenCode 1.17.18 HTTP/SSE at the

@@ -50,6 +50,7 @@ import { createFsSearchRuntime as createFsSearchRuntimeFactory } from './lib/fs/
 import { createOpenCodeLifecycleRuntime } from './lib/opencode/lifecycle.js';
 import { createPiGatewayLifecycleRuntime } from './lib/pi/gateway-lifecycle.js';
 import { resolveOpenChamberBackend } from './lib/pi/backend-selector.js';
+import { createPiSettingsResponseAugmenter } from './lib/pi/project-discovery.js';
 import { shouldReportManagedOpenCodeProcess } from './lib/pi/process-info.js';
 import { createOpenCodeEnvRuntime } from './lib/opencode/env-runtime.js';
 import { resolveOpenCodeEnvConfig } from './lib/opencode/env-config.js';
@@ -953,6 +954,9 @@ const clientPairingRuntime = createClientPairingRuntime({
 });
 const featureRoutesRuntime = createFeatureRoutesRuntime({
   clientReloadDelayMs: CLIENT_RELOAD_DELAY_MS,
+  augmentSettingsResponse: OPENCHAMBER_BACKEND === 'pi'
+    ? createPiSettingsResponseAugmenter()
+    : undefined,
 });
 const bootstrapRuntime = createBootstrapRuntime({
   createUiAuth,

@@ -47,6 +47,7 @@ import { installSkillsFromClawdHub } from '../skills-catalog/clawdhub/install.js
 export const createFeatureRoutesRuntime = (dependencies) => {
   const {
     clientReloadDelayMs,
+    augmentSettingsResponse,
   } = dependencies;
 
   let quotaProviders = null;
@@ -126,6 +127,7 @@ export const createFeatureRoutesRuntime = (dependencies) => {
       refreshOpenCodeAfterConfigChange,
       buildOpenCodeUrl,
       getOpenCodeAuthHeaders,
+      augmentSettingsResponse,
     });
 
     registerProjectIconRoutes(app, {

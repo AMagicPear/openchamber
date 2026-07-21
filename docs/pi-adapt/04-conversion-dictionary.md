@@ -82,6 +82,8 @@ the corresponding translation is designed and tested.
 
 ## ID and persistence rules
 
+| Settings project discovery | **implemented** | Pi `SessionManager.listAll()` cwd values are normalized to absolute paths, deduplicated in newest-first order, and mapped with OpenChamber `createProjectIdFromPath`; existing metadata/order and `activeProjectId` win, and discovered entries are response-only. Stable timestamps use session `created`/`modified` values. Temporary/unavailable-directory filtering and hide semantics are deferred. |
+
 **Planned:** persist an alias map from OpenCode UI `messageID` and live synthetic
 IDs to Pi durable entry IDs. Do not use response correlation IDs as durable entry
 IDs. Reconcile after `agent_settled`, since Pi persistence follows public

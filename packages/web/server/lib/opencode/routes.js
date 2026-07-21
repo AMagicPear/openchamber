@@ -20,6 +20,7 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
     refreshOpenCodeAfterConfigChange,
     buildOpenCodeUrl,
     getOpenCodeAuthHeaders,
+    augmentSettingsResponse,
   } = dependencies;
 
   let authLibrary = null;
@@ -135,9 +136,17 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
   app.get('/api/config/settings', async (_req, res) => {
     try {
       const settings = await readSettingsFromDiskMigrated();
-      res.json(formatSettingsResponse(settings));
+      const formatted = formatSettingsResponse(settings);
+      if (typeof augmentSettingsResponse === 'function') {
+        return res.json(await augmentSettingsResponse(formatted));
+      }
+      return res.json(formatted);
     } catch (error) {
-      console.error('Failed to read settings:', error);
+      if (typeof augmentSettingsResponse === 'function') {
+        console.error('Failed to read settings with runtime project discovery');
+      } else {
+        console.error('Failed to read settings:', error);
+      }
       res.status(500).json({ error: 'Failed to read settings' });
     }
   });
@@ -296,10 +305,17 @@ export const registerOpenCodeRoutes = (app, dependencies) => {
   app.put('/api/config/settings', async (req, res) => {
     try {
       const updated = await persistSettings(req.body ?? {});
-      res.json(updated);
+      if (typeof augmentSettingsResponse === 'function') {
+        return res.json(await augmentSettingsResponse(updated));
+      }
+      return res.json(updated);
     } catch (error) {
-      console.error('[API:PUT /api/config/settings] Failed to save settings:', error);
-      console.error('[API:PUT /api/config/settings] Error stack:', error.stack);
+      if (typeof augmentSettingsResponse === 'function') {
+        console.error('[API:PUT /api/config/settings] Failed to save settings with runtime project discovery');
+      } else {
+        console.error('[API:PUT /api/config/settings] Failed to save settings:', error);
+        console.error('[API:PUT /api/config/settings] Error stack:', error.stack);
+      }
       res.status(500).json({ error: 'Failed to save settings' });
     }
   });
