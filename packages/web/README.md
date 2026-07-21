@@ -113,10 +113,11 @@ OPENCODE_HOST=https://myhost:4096 OPENCODE_SKIP_START=true openchamber
 
 ### Experimental Pi backend
 
-Phase 2B includes an experimental read-only Pi compatibility gateway. Select it
-with `OPENCHAMBER_BACKEND=pi`; the default remains `opencode`. Prompt/session
-mutations, archived listing, models/providers, and live Pi event translation are
-not available yet.
+Phase 2B includes an experimental Pi compatibility gateway. Select it with
+`OPENCHAMBER_BACKEND=pi`; the default remains `opencode`. The SDK session create
+operation starts a fresh Pi RPC runtime and publishes `session.created`; prompt,
+abort, live message events, aliases binding, session update/delete/archive/fork,
+title ownership, and archived listing remain unavailable.
 
 <details>
 <summary>Bind managed OpenCode to LAN / Tailscale</summary>

@@ -33,6 +33,38 @@ function repositoryHarness() {
   };
 }
 
+function liveSessionHarness({ create = undefined } = {}) {
+  const session = {
+    cwd: directory,
+    sessionId: 'fresh-session',
+    sessionPath: '/sessions/fresh-session.jsonl',
+    createdAt: 1767225600000,
+    state: { sessionId: 'fresh-session', sessionFile: '/sessions/fresh-session.jsonl', messageCount: 0 },
+    generation: 1,
+  };
+  return {
+    session,
+    get: vi.fn(({ cwd, sessionId }) => cwd === directory && sessionId === session.sessionId ? session : undefined),
+    create: vi.fn(create || (async () => session)),
+    remove: vi.fn(async () => true),
+    close: vi.fn(async () => {}),
+  };
+}
+
+async function openSse(url) {
+  const chunks = [];
+  const response = await new Promise((resolve, reject) => {
+    const client = http.get(url, (res) => {
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.once('error', reject);
+      resolve(res);
+    });
+    client.once('error', reject);
+  });
+  return { response, chunks };
+}
+
 describe('Pi compatibility gateway', () => {
   it('rejects an explicitly supplied invalid message alias store', () => {
     expect(() => createPiCompatibilityGateway({
@@ -94,6 +126,80 @@ describe('Pi compatibility gateway', () => {
     await request(gateway.app).get('/session?cursor=1&limit=1').expect(200).expect(({ body }) => expect(body[0]).toMatchObject({ id: 'session-new' }));
     await request(gateway.app).get('/session/session-new').expect(200).expect(({ body }) => expect(body.id).toBe('session-new'));
     await request(gateway.app).get('/session/session-new/message').expect(200).expect(({ body }) => expect(body[0].info.id).toBe('msg_000000000000_user-entry'));
+  });
+
+  it('creates an authoritative Pi session through the installed SDK and publishes one event to global and directory SSE', async () => {
+    const repository = repositoryHarness();
+    repository.invalidate = vi.fn();
+    const liveSessions = liveSessionHarness();
+    const gateway = createPiCompatibilityGateway({
+      sessionRepository: repository,
+      liveSessionRegistry: liveSessions,
+      defaultDirectory: directory,
+    });
+    const started = await gateway.start();
+    const globalStream = await openSse(`${started.url}/global/event`);
+    const directoryStream = await openSse(`${started.url}/event?directory=%2Ftmp`);
+    const client = createOpencodeClient({ baseUrl: started.url });
+
+    const result = await client.session.create({ directory });
+    expect(result.data).toMatchObject({
+      id: 'fresh-session',
+      slug: 'fresh-session',
+      directory,
+      path: '/sessions/fresh-session.jsonl',
+      title: 'Untitled session',
+      version: expect.any(String),
+      time: { created: 1767225600000, updated: 1767225600000 },
+    });
+    expect(liveSessions.create).toHaveBeenCalledWith({ cwd: directory });
+    expect(repository.getSession).not.toHaveBeenCalled();
+    expect(repository.invalidate).toHaveBeenCalledTimes(2);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const globalText = globalStream.chunks.join('');
+    const directoryText = directoryStream.chunks.join('');
+    expect(globalText).toContain('event: session.created');
+    expect(directoryText).toContain('event: session.created');
+    expect(globalText).toContain('id: 1');
+    expect(directoryText).toContain('id: 1');
+    expect(globalText).toContain('"id":"fresh-session"');
+    expect(globalText).not.toContain('directory=%2Ftmp');
+
+    globalStream.response.destroy();
+    directoryStream.response.destroy();
+    await gateway.close();
+  });
+
+  it('rejects unsupported SDK creation fields and serves a fresh live session without repository fallback', async () => {
+    const repository = repositoryHarness();
+    const liveSessions = liveSessionHarness();
+    const gateway = createPiCompatibilityGateway({ sessionRepository: repository, liveSessionRegistry: liveSessions, defaultDirectory: directory });
+    await request(gateway.app).post('/session').send({ parentID: 'parent' }).expect(501);
+    await request(gateway.app).post('/session').send({ metadata: { owner: 'client' } }).expect(501);
+    await request(gateway.app).post('/session').send({ title: 'client title' }).expect(501);
+    await request(gateway.app).post('/session').send({ extra: 'unknown' }).expect(400);
+
+    await request(gateway.app).get('/session/fresh-session').expect(200).expect(({ body }) => {
+      expect(body).toMatchObject({ id: 'fresh-session', directory, path: '/sessions/fresh-session.jsonl' });
+    });
+    await request(gateway.app).get('/session/fresh-session/message').expect(200).expect([]);
+    expect(repository.getSession).not.toHaveBeenCalled();
+    expect(repository.getActiveBranch).not.toHaveBeenCalled();
+  });
+
+  it('keeps create successful and the live lookup usable when repository invalidation fails', async () => {
+    const repository = repositoryHarness();
+    repository.invalidate = vi.fn(() => { throw new Error('cache failure'); });
+    const liveSessions = liveSessionHarness();
+    const gateway = createPiCompatibilityGateway({ sessionRepository: repository, liveSessionRegistry: liveSessions, defaultDirectory: directory });
+
+    await request(gateway.app).post('/session?directory=%2Ftmp').expect(200).expect(({ body }) => {
+      expect(body.id).toBe('fresh-session');
+    });
+    await request(gateway.app).get('/session/fresh-session?directory=%2Ftmp').expect(200);
+    expect(repository.getSession).not.toHaveBeenCalled();
+    expect(liveSessions.create).toHaveBeenCalledOnce();
   });
 
   it('paginates chronologically projected history despite non-chronological Pi entry ids', async () => {

@@ -12,6 +12,7 @@ import {
   piSessionToGlobalSession,
   piSessionToOpenCodeSession,
 } from './opencode-shapes.js';
+import { createPiLiveSessionRegistry } from './live-session-registry.js';
 
 function fail(status, name, message) {
   const error = new Error(message);
@@ -63,6 +64,31 @@ function sortSessions(sessions) {
 
 function sendJson(res, value) {
   res.type('application/json').send(value);
+}
+
+function isNonEmptyCreationValue(value) {
+  if (value === undefined || value === null || value === false) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+  return true;
+}
+
+function validateSessionCreateBody(body) {
+  if (body === undefined) return {};
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw fail(400, 'BadRequestError', 'session creation body is invalid');
+  }
+  const unsupported = new Set(['parentID', 'metadata', 'title', 'agent', 'model', 'permission', 'workspaceID']);
+  for (const [key, value] of Object.entries(body)) {
+    if (!unsupported.has(key) && isNonEmptyCreationValue(value)) {
+      throw fail(400, 'BadRequestError', `session creation field ${key} is not supported`);
+    }
+    if (unsupported.has(key) && isNonEmptyCreationValue(value)) {
+      throw fail(501, 'UnsupportedError', `session creation field ${key} is not supported by Pi`);
+    }
+  }
+  return body;
 }
 
 async function readConfig(provider, directory) {
@@ -117,13 +143,20 @@ export function createPiCompatibilityGateway(options = {}) {
   const pathsProvider = options.pathsProvider || ((directory) => piDirectoryToPath(directory, { home: os.homedir() }));
   const vcsProvider = options.vcsProvider;
   const processManager = options.processManager;
+  const liveSessions = options.liveSessionRegistry || (
+    processManager && typeof processManager.ensureProcess === 'function'
+      ? createPiLiveSessionRegistry({ processManager, randomUUID: options.randomUUID })
+      : null
+  );
   const createGatewayServer = options.createServer || createServer;
   const version = options.version || VERSION;
   const sseHeartbeatIntervalMs = Number.isFinite(options.sseHeartbeatIntervalMs) && options.sseHeartbeatIntervalMs > 0
     ? Math.min(options.sseHeartbeatIntervalMs, 19_000)
     : 10_000;
   const app = express();
+  app.use(express.json({ limit: '1mb' }));
   const sseClients = new Set();
+  let sseEventId = 0;
 
   const health = (_req, res) => sendJson(res, { healthy: true, version });
   app.get('/global/health', health);
@@ -163,6 +196,15 @@ export function createPiCompatibilityGateway(options = {}) {
       void writeSseChunk(client, ': heartbeat\n\n');
     }, sseHeartbeatIntervalMs);
     client.heartbeat.unref?.();
+  };
+
+  const publishSseEvent = (payload, directory) => {
+    const eventId = String(++sseEventId);
+    const chunk = `id: ${eventId}\nevent: ${payload.type}\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of Array.from(sseClients)) {
+      if (client.directory !== null && client.directory !== directory) continue;
+      void writeSseChunk(client, chunk);
+    }
   };
 
   app.get('/global/event', (req, res) => openSseStream(req, res, null));
@@ -256,6 +298,32 @@ export function createPiCompatibilityGateway(options = {}) {
   app.get('/experimental/session', route(async (req, res) => sendJson(res, await listRoute(req, res, true))));
   app.get('/session', route(async (req, res) => sendJson(res, await listRoute(req, res, false))));
 
+  app.post('/session', route(async (req, res) => {
+    const directory = optionalDirectory(req, defaultDirectory);
+    validateSessionCreateBody(req.body);
+    if (!liveSessions) throw fail(501, 'UnsupportedError', 'session creation is not available');
+
+    const binding = await liveSessions.create({ cwd: directory });
+    const createdAt = binding.createdAt;
+    const sessionInfo = {
+      id: binding.sessionId,
+      path: binding.sessionPath,
+      cwd: binding.cwd,
+      created: new Date(createdAt),
+      modified: new Date(createdAt),
+    };
+    const session = piSessionToOpenCodeSession(sessionInfo, { version });
+
+    // A failed invalidation must not turn a confirmed live create into a missing
+    // response. The live registry remains the authoritative immediate lookup.
+    if (typeof repository.invalidate === 'function') {
+      await Promise.resolve().then(() => repository.invalidate({ directory })).catch(() => {});
+      await Promise.resolve().then(() => repository.invalidate()).catch(() => {});
+    }
+    publishSseEvent({ type: 'session.created', properties: { info: session } }, directory);
+    sendJson(res, session);
+  }));
+
   app.get('/session/status', route(async (req, res) => {
     const directory = req.query.directory === undefined ? undefined : directoryValue(req.query.directory);
     if (!processManager || typeof processManager.getSnapshot !== 'function') return sendJson(res, {});
@@ -270,6 +338,18 @@ export function createPiCompatibilityGateway(options = {}) {
   }));
 
   app.get('/session/:sessionID', route(async (req, res) => {
+    const liveDirectory = optionalDirectory(req, defaultDirectory);
+    const live = liveSessions?.get({ cwd: liveDirectory, sessionId: req.params.sessionID });
+    if (live) {
+      sendJson(res, piSessionToOpenCodeSession({
+        id: live.sessionId,
+        path: live.sessionPath,
+        cwd: live.cwd,
+        created: new Date(live.createdAt),
+        modified: new Date(live.createdAt),
+      }, { version }));
+      return;
+    }
     const directory = req.query.directory === undefined ? undefined : directoryValue(req.query.directory);
     const info = await repository.getSession(req.params.sessionID, { directory });
     if (!info) throw fail(404, 'NotFoundError', 'session not found');
@@ -278,6 +358,12 @@ export function createPiCompatibilityGateway(options = {}) {
   }));
 
   app.get('/session/:sessionID/message', route(async (req, res) => {
+    const liveDirectory = optionalDirectory(req, defaultDirectory);
+    const live = liveSessions?.get({ cwd: liveDirectory, sessionId: req.params.sessionID });
+    if (live && live.state?.messageCount === 0) {
+      sendJson(res, []);
+      return;
+    }
     const directory = req.query.directory === undefined ? undefined : directoryValue(req.query.directory);
     const limit = integerQuery(req.query.limit, 'limit', 100);
     const branch = await repository.getActiveBranch(req.params.sessionID, { directory });

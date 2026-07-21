@@ -72,7 +72,7 @@ The manager drains stderr without exposing its contents. It only retains a bound
 byte count in snapshots. It does not log commands, prompts, payloads, stderr, or
 credentials.
 
-## Phase 2A: read-only compatibility gateway
+## Phase 2A: compatibility gateway
 
 Phase 2A adds three intentionally standalone modules:
 
@@ -96,7 +96,8 @@ Phase 2A adds three intentionally standalone modules:
   matching assistant ToolParts; unmatched or missing results do not remove
   unrelated records.
 - `gateway.js` creates an Express app plus an optional ephemeral loopback listener.
-  It exposes only read-only OpenCode-shaped bootstrap/history routes, validates
+  It exposes OpenCode-shaped bootstrap/history routes plus the isolated session
+  create boundary, validates
   explicit absolute existing directories, returns generic structured errors, and
   uses deliberate 501 responses for deferred capabilities. Experimental session
   pagination uses a strict modified-time boundary, deterministic id tie-breaks,
@@ -106,6 +107,16 @@ Phase 2A adds three intentionally standalone modules:
   start. In Phase 2B it is registered only by the Pi lifecycle and reached
   through the existing OpenChamber proxy.
 
+`live-session-registry.js` is the gateway-owned live identity boundary for the
+supported `POST /session` operation. It keys bindings by normalized cwd and Pi
+session id, deduplicates concurrent startup, requires `get_state` to confirm the
+exact id and absolute `sessionFile`, tracks manager generations, and removes a
+binding when the RPC manager reports process failure. It is intentionally not a
+repository fallback: durable catalog reads never prove that a process is live.
+Create invalidates the directory and global repository caches on a best-effort
+basis; invalidation failure leaves the confirmed live binding available for
+immediate lookup rather than turning a successful create into an apparent miss.
+
 Durable history ids in this phase are provisional. Phase 3 must add live
 OpenCode/live-to-Pi alias binding and settled reconciliation on top of the
 persistent sidecar before prompt and SSE flows can claim complete identity parity.
@@ -114,7 +125,10 @@ return `[]` because the pending-request store is authoritatively empty before li
 Pi processes/extensions exist; this is not an archive or failure fallback.
 Archived listing remains unsupported until alias binding and settled reconciliation
 exist on top of the storage foundation.
-Phase 2A is therefore not a complete UI bootstrap claim.
+Session create is the only session mutation in this phase. Prompt, abort, live
+message events, aliases binding, session update/delete/archive/fork, and title
+sidecars remain unsupported. Phase 2A is therefore not a complete UI bootstrap
+claim.
 
 ## Durable message alias storage foundation
 
@@ -131,7 +145,7 @@ translation depends on this foundation yet.
 
 ## Phase 2B: backend selector and lifecycle
 
-Set `OPENCHAMBER_BACKEND=pi` to select the experimental read-only Pi backend.
+Set `OPENCHAMBER_BACKEND=pi` to select the experimental Pi backend.
 Values are case- and whitespace-normalized; only `opencode` and `pi` are
 supported. The default is `opencode`, and invalid explicit values fail clearly at
 startup. `OPENCHAMBER_BACKEND` is independent of all `OPENCODE_*` variables.
@@ -144,7 +158,7 @@ binds only to loopback on an ephemeral port, is checked through
 `{ url, pid: null, close() }`. Closing that handle stops the gateway before all
 Pi RPC processes; restart and partial-start cleanup are idempotent.
 
-The gateway's read-only `/global/event` and `/event` endpoints emit an initial
+The gateway's `/global/event` and `/event` endpoints emit an initial
 `server.connected` SSE payload, preserve validated directory metadata for the
 scoped endpoint, and send frequent comment heartbeats. They do not translate or
 replay live Pi events. Pi health monitoring probes only this in-process gateway,

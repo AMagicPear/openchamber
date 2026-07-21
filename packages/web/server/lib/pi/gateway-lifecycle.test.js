@@ -37,6 +37,7 @@ function createRuntime(overrides = {}) {
       return manager;
     }),
     createSessionRepository: vi.fn(() => ({})),
+    createLiveSessionRegistry: vi.fn(() => ({ close: vi.fn(async () => {}) })),
     createMessageAliasStore: vi.fn(() => {
       const store = { close: vi.fn(async () => { closeOrder.push('message-alias-store'); }) };
       aliasStores.push(store);
@@ -96,6 +97,7 @@ describe('Pi gateway lifecycle', () => {
       fetchImpl: vi.fn(async () => ({ ok: true, json: async () => ({ healthy: true }) })),
       createRpcProcessManager: vi.fn(() => ({ shutdown: vi.fn(async () => {}) })),
       createSessionRepository: vi.fn(() => ({})),
+      createLiveSessionRegistry: vi.fn(() => ({ close: vi.fn(async () => {}) })),
       createMessageAliasStore: vi.fn(() => {
         const store = { close: vi.fn(async () => {}) };
         aliasStores.push(store);
@@ -153,6 +155,7 @@ describe('Pi gateway lifecycle', () => {
     const managerShutdown = vi.fn(async () => {});
     const { runtime, state } = createRuntime({
       createRpcProcessManager: () => ({ shutdown: managerShutdown }),
+      createLiveSessionRegistry: () => ({ close: vi.fn(async () => {}) }),
       createCompatibilityGateway: () => ({ start: vi.fn(async () => { throw new Error('bind failed'); }), close: gatewayClose }),
     });
 
