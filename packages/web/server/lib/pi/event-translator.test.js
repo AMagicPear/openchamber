@@ -588,4 +588,112 @@ describe('createPiEventTranslator', () => {
     expect(completed.time.end).toBe(2500);
     t.close();
   });
+
+  it('records text part start time at text_start and uses it at text_end', () => {
+    const pm = createFakeProcessManager();
+    const events = [];
+    let currentTime = 1000;
+    const t = createPiEventTranslator({
+      sessionId: 's', cwd: '/tmp', processManager: pm, processKey: 'k',
+      now: () => currentTime,
+      onEvent: events.push.bind(events),
+    });
+
+    pm.emit('k', { type: 'message_start', message: { role: 'assistant' } });
+    currentTime = 1000;
+    pm.emit('k', {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_start', contentIndex: 0, partial: { content: [{ type: 'text', text: '' }] } },
+    });
+    currentTime = 1500;
+    pm.emit('k', {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'hi', partial: { content: [{ type: 'text', text: 'hi' }] } },
+    });
+    currentTime = 1750;
+    pm.emit('k', {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: 'hi', partial: { content: [{ type: 'text', text: 'hi' }] } },
+    });
+
+    const finalTextPart = events
+      .filter((e) => e.type === 'message.part.updated' && e.properties.part?.type === 'text')
+      .at(-1);
+    expect(finalTextPart.properties.part.time.start).toBe(1000);
+    expect(finalTextPart.properties.part.time.end).toBe(1750);
+    t.close();
+  });
+
+  it('does not emit session.idle at assistant message_end — only at agent_settled', () => {
+    const pm = createFakeProcessManager();
+    const events = [];
+    const t = createPiEventTranslator({
+      sessionId: 's', cwd: '/tmp', processManager: pm, processKey: 'k',
+      onEvent: events.push.bind(events),
+    });
+
+    pm.emit('k', { type: 'agent_start' });
+    pm.emit('k', { type: 'message_start', message: { role: 'assistant' } });
+    pm.emit('k', {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_start', contentIndex: 0, partial: { content: [{ type: 'text', text: '' }] } },
+    });
+    pm.emit('k', {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'hello', partial: { content: [{ type: 'text', text: 'hello' }] } },
+    });
+    pm.emit('k', {
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: 'hello', partial: { content: [{ type: 'text', text: 'hello' }] } },
+    });
+    pm.emit('k', { type: 'message_end', message: { role: 'assistant', stopReason: 'end' } });
+
+    // Tool execution_start may legitimately arrive AFTER message_end when
+    // tools are slow — the UI must remain in 'busy' until agent_settled.
+    pm.emit('k', { type: 'tool_execution_start', toolCallId: 'late', toolName: 'bash', args: {} });
+
+    expect(events.filter((e) => e.type === 'session.idle')).toHaveLength(0);
+
+    pm.emit('k', { type: 'agent_settled' });
+    expect(events.filter((e) => e.type === 'session.idle')).toHaveLength(1);
+    t.close();
+  });
+
+  it('invokes onSessionInfoChanged but does not emit session.updated itself', () => {
+    const pm = createFakeProcessManager();
+    const events = [];
+    const onSessionInfoChanged = vi.fn();
+    const t = createPiEventTranslator({
+      sessionId: 's', cwd: '/tmp', processManager: pm, processKey: 'k',
+      onSessionInfoChanged,
+      onEvent: events.push.bind(events),
+    });
+
+    pm.emit('k', { type: 'session_info_changed', name: 'New Title' });
+
+    expect(onSessionInfoChanged).toHaveBeenCalledTimes(1);
+    // The translator must not synthesize a partial Session; the gateway reads
+    // the canonical file and emits session.updated with the full shape.
+    expect(events.filter((e) => e.type === 'session.updated')).toHaveLength(0);
+    t.close();
+  });
+
+  it('does not invoke onSessionInfoChanged for non-string or empty names (Pi does not emit those, but stay defensive)', () => {
+    const pm = createFakeProcessManager();
+    const events = [];
+    const onSessionInfoChanged = vi.fn();
+    const t = createPiEventTranslator({
+      sessionId: 's', cwd: '/tmp', processManager: pm, processKey: 'k',
+      onSessionInfoChanged,
+      onEvent: events.push.bind(events),
+    });
+
+    // Pi only ever emits with a name string, but stay defensive against
+    // future event-shape changes by still routing through the callback.
+    pm.emit('k', { type: 'session_info_changed', name: '' });
+
+    expect(onSessionInfoChanged).toHaveBeenCalledTimes(1);
+    expect(events).toHaveLength(0);
+    t.close();
+  });
 });

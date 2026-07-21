@@ -323,6 +323,43 @@ export function createPiCompatibilityGateway(options = {}) {
           Promise.resolve().then(() => repository.invalidate()).catch(() => {});
         }
       },
+      onSessionInfoChanged: () => {
+        // Pi has just persisted the new session name to the JSONL file via
+        // appendSessionInfo; invalidate caches so the next read sees the new
+        // title, then emit session.updated with the canonical Session shape
+        // (proper projectID hash, original created time, version). The shape
+        // is built through piSessionToOpenCodeSession so live and durable
+        // session records stay consistent.
+        const refresh = async () => {
+          if (typeof repository.invalidate === 'function') {
+            try { repository.invalidate({ directory: cwd }); } catch {}
+            try { repository.invalidate(); } catch {}
+          }
+          let info;
+          try {
+            // Try cwd-filtered lookup first (cheap path); fall back to a
+            // global scan when symlink resolution makes Node's
+            // path.resolve(cwd) diverge from Pi's stored info.cwd — common
+            // on macOS where /var → /private/var and /tmp → /private/tmp.
+            info = await repository.getSession(sessionId, { directory: cwd });
+            if (!info) {
+              const all = await repository.listAll();
+              info = all.find((s) => s.id === sessionId);
+            }
+          } catch {
+            return;
+          }
+          if (!info || !info.path) return;
+          try {
+            const session = piSessionToOpenCodeSession(info, { version });
+            publishSseEvent({ type: 'session.updated', properties: { info: session } }, cwd);
+          } catch {
+            // Non-fatal: the cache invalidation above will still surface the
+            // new title on the next explicit list/session fetch.
+          }
+        };
+        void refresh();
+      },
     });
     eventTranslators.set(key, translator);
     return translator;
@@ -398,6 +435,34 @@ export function createPiCompatibilityGateway(options = {}) {
   }));
 
   app.get('/session/:sessionID', route(async (req, res) => {
+    // Even for live sessions, prefer the file's current state — pi-spark
+    // auto-naming or explicit set_session_name updates the file after the
+    // live binding was created, and the live binding never refreshes its
+    // cached sessionName.  On macOS, symlink resolution can make the
+    // cwd-filtered lookup miss (e.g. /var -> /private/var on /tmp), so
+    // fall back to the live binding instead of 404.
+    const info = await (async () => {
+      const lookupDir = req.query.directory === undefined
+        ? undefined
+        : directoryValue(req.query.directory);
+      const file = await repository.getSession(req.params.sessionID, { directory: lookupDir });
+      if (file) return file;
+      // Cwd-filtered lookup missed (symlink); try the global catalog.
+      if (lookupDir) {
+        const all = await repository.listAll();
+        const match = all.find((s) => s.id === req.params.sessionID);
+        if (match) return match;
+      }
+      return null;
+    })();
+
+    if (info) {
+      const directory = info.cwd ? path.resolve(info.cwd) : defaultDirectory;
+      const index = await repository.getCatalogIndex({ directory });
+      sendJson(res, piSessionToOpenCodeSession(info, { sessionIndex: index, version }));
+      return;
+    }
+
     const liveDirectory = optionalDirectory(req, defaultDirectory);
     const live = liveSessions?.get({ cwd: liveDirectory, sessionId: req.params.sessionID });
     if (live) {
@@ -410,11 +475,8 @@ export function createPiCompatibilityGateway(options = {}) {
       }, { version }));
       return;
     }
-    const directory = req.query.directory === undefined ? undefined : directoryValue(req.query.directory);
-    const info = await repository.getSession(req.params.sessionID, { directory });
-    if (!info) throw fail(404, 'NotFoundError', 'session not found');
-    const index = await repository.getCatalogIndex({ directory });
-    sendJson(res, piSessionToOpenCodeSession(info, { sessionIndex: index, version }));
+
+    throw fail(404, 'NotFoundError', 'session not found');
   }));
 
   // Shared prompt handler — accepts both SDK prompt_async and simpler prompt bodies.
@@ -484,19 +546,19 @@ export function createPiCompatibilityGateway(options = {}) {
     const directory = req.query.directory === undefined ? undefined : directoryValue(req.query.directory);
     const limit = integerQuery(req.query.limit, 'limit', 100);
     
-    // Live sessions are still being streamed via SSE; the frontend already has
-    // the messages from live events. Return empty so the frontend doesn't
-    // receive a second copy with different (durable) IDs that would duplicate
-    // every message in the UI.
-    const liveDirectory = optionalDirectory(req, defaultDirectory);
-    const live = liveSessions?.get({ cwd: liveDirectory, sessionId: req.params.sessionID });
-    if (live) {
-      sendJson(res, []);
-      return;
+    // Always try the durable file first — even for live sessions, because
+    // a page refresh loses the SSE-derived message state.  We only return
+    // [] for truly brand-new sessions where no message has been persisted
+    // yet (Pi hasn't written any session entries).
+    let branch = await repository.getActiveBranch(req.params.sessionID, { directory });
+    if (!branch) {
+      // Cwd-filtered lookup may miss on macOS where symlink resolution
+      // diverges (e.g. Node path.resolve returns /var/..., the file
+      // stores /var/..., but Pi session-catalog resolution uses the
+      // global session dir keyed on the non-symlinked form).  Fall
+      // back to a global scan so refresh still loads messages.
+      branch = await repository.getActiveBranch(req.params.sessionID, {});
     }
-    
-    // Session is no longer live — serve from durable storage.
-    const branch = await repository.getActiveBranch(req.params.sessionID, { directory });
     if (branch) {
       const messages = piBranchToOpenCodeMessages(branch.entries, {
         sessionId: branch.info.id,
@@ -515,6 +577,17 @@ export function createPiCompatibilityGateway(options = {}) {
       return;
     }
     
+    // No durable branch yet — the session was just created and hasn't
+    // received any prompt.  Return empty rather than 404 so the UI shows
+    // an empty conversation instead of an error.
+    const liveDirectory = optionalDirectory(req, defaultDirectory);
+    const live = liveSessions?.get({ cwd: liveDirectory, sessionId: req.params.sessionID });
+    if (live) {
+      sendJson(res, []);
+      return;
+    }
+    
+    // Not live and not in file → genuinely unknown session.
     throw fail(404, 'NotFoundError', 'session not found');
   }));
 

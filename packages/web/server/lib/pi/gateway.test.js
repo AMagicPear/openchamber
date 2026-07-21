@@ -173,7 +173,7 @@ describe('Pi compatibility gateway', () => {
     await gateway.close();
   });
 
-  it('rejects unsupported SDK creation fields and serves a fresh live session without repository fallback', async () => {
+  it('rejects unsupported SDK creation fields and serves a fresh live session when the file is not ready yet', async () => {
     const repository = repositoryHarness();
     // Fresh session: repository has no branch yet (Pi hasn't written any entries)
     repository.getActiveBranch.mockResolvedValue(null);
@@ -188,7 +188,8 @@ describe('Pi compatibility gateway', () => {
       expect(body).toMatchObject({ id: 'fresh-session', directory, path: '/sessions/fresh-session.jsonl' });
     });
     await request(gateway.app).get('/session/fresh-session/message').expect(200).expect([]);
-    expect(repository.getSession).not.toHaveBeenCalled();
+    // File-first lookup: getSession was called but missed (fresh session not in catalog yet)
+    expect(repository.getSession).toHaveBeenCalled();
   });
 
   it('keeps create successful and the live lookup usable when repository invalidation fails', async () => {
@@ -200,8 +201,10 @@ describe('Pi compatibility gateway', () => {
     await request(gateway.app).post('/session?directory=%2Ftmp').expect(200).expect(({ body }) => {
       expect(body.id).toBe('fresh-session');
     });
+    // File-first lookup: getSession is tried, returns undefined (not in catalog),
+    // then falls back to the live binding.
     await request(gateway.app).get('/session/fresh-session?directory=%2Ftmp').expect(200);
-    expect(repository.getSession).not.toHaveBeenCalled();
+    expect(repository.getSession).toHaveBeenCalled();
     expect(liveSessions.create).toHaveBeenCalledOnce();
   });
 
@@ -527,6 +530,161 @@ describe('Pi compatibility gateway', () => {
     await request(gateway.app)
       .delete(`/session/nonexistent?directory=${encodeURIComponent(directory)}`)
       .expect(404);
+    await gateway.close();
+  });
+
+  it('session_info_changed invalidates cache and emits session.updated with the canonical Session shape', async () => {
+    const liveSessions = liveSessionHarness();
+    const invalidated = { directory: 0, global: 0 };
+    const processManager = {
+      request: vi.fn(async () => ({ ok: true })),
+      subscribe: vi.fn(() => () => {}),
+      stopProcess: vi.fn(async () => true),
+      getSnapshot: vi.fn(() => ({ processes: [] })),
+    };
+    // Track subscribed listeners so the test can emit session_info_changed
+    // through the same path the gateway uses.
+    const subscribed = new Map();
+    processManager.subscribe = vi.fn((key, listener) => {
+      let set = subscribed.get(key);
+      if (!set) { set = new Set(); subscribed.set(key, set); }
+      set.add(listener);
+      return () => set.delete(listener);
+    });
+
+    const repository = repositoryHarness();
+    const sessionInfo = {
+      id: 'fresh-session',
+      path: '/sessions/fresh-session.jsonl',
+      cwd: directory,
+      name: 'Renamed Session',
+      created: new Date(1000),
+      modified: new Date(5000),
+      messageCount: 1,
+      firstMessage: 'first',
+      allMessagesText: 'first',
+    };
+    repository.invalidate = vi.fn((opts) => {
+      if (opts && opts.directory === directory) invalidated.directory += 1;
+      else invalidated.global += 1;
+      return Promise.resolve();
+    });
+    repository.getSession = vi.fn(async () => sessionInfo);
+
+    const gateway = createPiCompatibilityGateway({
+      sessionRepository: repository,
+      liveSessionRegistry: liveSessions,
+      processManager,
+      defaultDirectory: directory,
+    });
+    const started = await gateway.start();
+    const directoryStream = await openSse(`${started.url}/event?directory=${encodeURIComponent(directory)}`);
+
+    // The first prompt_async triggers getOrCreateEventTranslator which
+    // subscribes the translator to the processManager; from that moment on
+    // session_info_changed events emitted into the subscription reach the
+    // gateway's session rename handler.
+    await request(gateway.app)
+      .post(`/session/fresh-session/prompt_async?directory=${encodeURIComponent(directory)}`)
+      .send({ parts: [{ type: 'text', text: 'hi' }] })
+      .expect(204);
+
+    const listeners = subscribed.get(`pi:${JSON.stringify([directory, 'fresh-session'])}`);
+    expect(listeners && listeners.size).toBe(1);
+
+    for (const listener of listeners) {
+      listener({ type: 'session_info_changed', name: 'Renamed Session' });
+    }
+
+    // The rename handler is async (cache invalidate + getSession + emit);
+    // wait for the microtask queue to drain.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(invalidated.directory).toBeGreaterThanOrEqual(1);
+    expect(invalidated.global).toBeGreaterThanOrEqual(1);
+    expect(repository.getSession).toHaveBeenCalledWith('fresh-session', { directory });
+
+    const text = directoryStream.chunks.join('');
+    expect(text).toContain('event: session.updated');
+    expect(text).toContain('"title":"Renamed Session"');
+    // projectID must be hashed, not the raw cwd (event would have set cwd)
+    expect(text).toMatch(/"projectID":"project_[0-9a-f]{64}"/);
+    // time.created must come from the file (1000), not the rename event time
+    expect(text).toContain('"created":1000');
+    // time.updated must come from the file (5000), greater than created
+    expect(text).toContain('"updated":5000');
+    // version must be present
+    expect(text).toMatch(/"version":"[^"]+"/);
+    // path must be present and absolute
+    expect(text).toContain('"path":"/sessions/fresh-session.jsonl"');
+
+    directoryStream.response.destroy();
+    await gateway.close();
+  });
+
+  it('session_info_changed falls back to global listAll when cwd-filtered getSession misses (macOS symlink mismatch)', async () => {
+    const liveSessions = liveSessionHarness();
+    const processManager = {
+      request: vi.fn(async () => ({ ok: true })),
+      subscribe: vi.fn(() => () => {}),
+      stopProcess: vi.fn(async () => true),
+      getSnapshot: vi.fn(() => ({ processes: [] })),
+    };
+    const subscribed = new Map();
+    processManager.subscribe = vi.fn((key, listener) => {
+      let set = subscribed.get(key);
+      if (!set) { set = new Set(); subscribed.set(key, set); }
+      set.add(listener);
+      return () => set.delete(listener);
+    });
+
+    const repository = repositoryHarness();
+    const sessionInfo = {
+      id: 'fresh-session',
+      path: '/sessions/fresh-session.jsonl',
+      cwd: '/private/var/folders/dk/.../pi-smoke', // canonical form Pi stored
+      name: 'Renamed Session',
+      created: new Date(2000),
+      modified: new Date(7000),
+      messageCount: 1,
+      firstMessage: 'first',
+      allMessagesText: 'first',
+    };
+    // cwd-filtered lookup misses (Node path.resolve returns /var/... but Pi
+    // stored /private/var/...), forcing the fallback to listAll().
+    repository.getSession = vi.fn(async () => undefined);
+    repository.listAll = vi.fn(async () => [sessionInfo]);
+
+    const gateway = createPiCompatibilityGateway({
+      sessionRepository: repository,
+      liveSessionRegistry: liveSessions,
+      processManager,
+      defaultDirectory: directory,
+    });
+    const started = await gateway.start();
+    const directoryStream = await openSse(`${started.url}/event?directory=${encodeURIComponent(directory)}`);
+
+    await request(gateway.app)
+      .post(`/session/fresh-session/prompt_async?directory=${encodeURIComponent(directory)}`)
+      .send({ parts: [{ type: 'text', text: 'hi' }] })
+      .expect(204);
+
+    const listeners = subscribed.get(`pi:${JSON.stringify([directory, 'fresh-session'])}`);
+    for (const listener of listeners) {
+      listener({ type: 'session_info_changed', name: 'Renamed Session' });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(repository.getSession).toHaveBeenCalledWith('fresh-session', { directory });
+    expect(repository.listAll).toHaveBeenCalled();
+
+    const text = directoryStream.chunks.join('');
+    expect(text).toContain('event: session.updated');
+    expect(text).toContain('"title":"Renamed Session"');
+    expect(text).toContain('"created":2000');
+    expect(text).toContain('"updated":7000');
+
+    directoryStream.response.destroy();
     await gateway.close();
   });
 });

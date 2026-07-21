@@ -90,6 +90,7 @@ export function createPiEventTranslator(options = {}) {
     now = Date.now,
     onEvent,
     onSettled,
+    onSessionInfoChanged,
   } = options;
 
   if (typeof sessionId !== 'string' || sessionId.length === 0) throw new TypeError('sessionId is required');
@@ -217,6 +218,7 @@ export function createPiEventTranslator(options = {}) {
     const part = getOrCreatePart(state, contentIndex, 'text');
     const text = eventData.partial?.content?.[contentIndex]?.text ?? '';
     part.accumulated = text;
+    part.startTime = timestamp(now);
     state.accumulatedContent += text;
     emit('message.part.updated', {
       part: {
@@ -253,10 +255,13 @@ export function createPiEventTranslator(options = {}) {
     const contentIndex = eventData.contentIndex ?? state.parts.size;
     const part = getOrCreatePart(state, contentIndex, 'text');
     const finalText = typeof eventData.content === 'string' ? eventData.content : part.accumulated;
+    const endTime = timestamp(now);
+    const startTime = part.startTime ?? endTime;
     // Replace accumulated text with the authoritative final content so subsequent
     // alias reconciliation matches the persisted version exactly.
     state.accumulatedContent = state.accumulatedContent.slice(0, state.accumulatedContent.length - part.accumulated.length) + finalText;
     part.accumulated = finalText;
+    part.startTime = startTime;
     emit('message.part.updated', {
       part: {
         id: part.partId,
@@ -264,7 +269,7 @@ export function createPiEventTranslator(options = {}) {
         messageID: state.messageId,
         type: 'text',
         text: finalText,
-        time: { start: timestamp(now), end: timestamp(now) },
+        time: { start: startTime, end: endTime },
       },
     });
   }
@@ -440,9 +445,6 @@ export function createPiEventTranslator(options = {}) {
 
     if (state.role === 'assistant') {
       emit('message.updated', { info: buildAssistantInfo(state, message) });
-      // Signal idle as soon as the assistant message is complete, rather than
-      // waiting for agent_settled which may arrive several seconds later.
-      emit('session.idle', {});
     }
     // Persist accumulated content for alias reconciliation on agent_settled.
     if (state.accumulatedContent.length > 0) {
@@ -615,6 +617,13 @@ export function createPiEventTranslator(options = {}) {
         emit('session.idle', {});
         if (typeof onSettled === 'function') onSettled();
         void reconcileAliases();
+        break;
+      case 'session_info_changed':
+        // The Pi event only carries { name }; the gateway callback is
+        // responsible for reading the freshly persisted session file and
+        // emitting session.updated with the canonical OpenCode Session shape
+        // (proper projectID hash, original created time, version, etc).
+        if (typeof onSessionInfoChanged === 'function') onSessionInfoChanged();
         break;
       case 'lifecycle':
         if (event.event === 'process_failed') close();
