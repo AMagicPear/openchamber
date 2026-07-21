@@ -11,9 +11,9 @@
 | 编号 | 文件 | 阶段 | 状态 |
 |---|---|---|---|
 | 01 | [`01-research.md`](./01-research.md) | 调研 | ✅ 已完成 |
-| 02 | [`02-architecture.md`](./02-architecture.md) | 架构设计 | ✅ Phase 1 / 2A 边界已完成，生命周期集成待 Phase 2B |
-| 03 | [`03-implementation-log.md`](./03-implementation-log.md) | 实施日志（按 Phase 增量） | ✅ Phase 1 / 2A 边界已完成，完整 UI bootstrap 未完成 |
-| 04 | [`04-conversion-dictionary.md`](./04-conversion-dictionary.md) | OpenCode HTTP ← → Pi RPC 命令名/事件/字段映射表 | ✅ Phase 2A 只读活动映射已实现，其余按阶段规划 |
+| 02 | [`02-architecture.md`](./02-architecture.md) | 架构设计 | ✅ Phase 1 / 2A / 2B backend lifecycle boundary completed |
+| 03 | [`03-implementation-log.md`](./03-implementation-log.md) | 实施日志（按 Phase 增量） | ✅ Phase 2B backend selection/lifecycle completed; full UI bootstrap 未完成 |
+| 04 | [`04-conversion-dictionary.md`](./04-conversion-dictionary.md) | OpenCode HTTP ← → Pi RPC 命令名/事件/字段映射表 | ✅ Phase 2B read-only gateway SSE boundary added; translation remains planned |
 
 ## 命名规范
 

@@ -48,6 +48,9 @@ import {
 } from './lib/event-stream/index.js';
 import { createFsSearchRuntime as createFsSearchRuntimeFactory } from './lib/fs/search.js';
 import { createOpenCodeLifecycleRuntime } from './lib/opencode/lifecycle.js';
+import { createPiGatewayLifecycleRuntime } from './lib/pi/gateway-lifecycle.js';
+import { resolveOpenChamberBackend } from './lib/pi/backend-selector.js';
+import { shouldReportManagedOpenCodeProcess } from './lib/pi/process-info.js';
 import { createOpenCodeEnvRuntime } from './lib/opencode/env-runtime.js';
 import { resolveOpenCodeEnvConfig } from './lib/opencode/env-config.js';
 import { createHmrStateRuntime } from './lib/opencode/hmr-state-runtime.js';
@@ -119,6 +122,7 @@ const TUNNEL_BOOTSTRAP_TTL_MAX_MS = 24 * 60 * 60 * 1000;
 const TUNNEL_SESSION_TTL_DEFAULT_MS = 8 * 60 * 60 * 1000;
 const TUNNEL_SESSION_TTL_MIN_MS = 5 * 60 * 1000;
 const TUNNEL_SESSION_TTL_MAX_MS = 30 * 24 * 60 * 60 * 1000;
+const OPENCHAMBER_BACKEND = resolveOpenChamberBackend(process.env);
 
 function headerIncludesEventStream(value) {
   if (typeof value === 'string') {
@@ -1026,35 +1030,41 @@ Object.defineProperties(openCodeLifecycleState, {
   resolvedWslDistro: { get: () => resolvedWslDistro, set: (value) => { resolvedWslDistro = value; } },
 });
 
-const openCodeLifecycleRuntime = createOpenCodeLifecycleRuntime({
+const lifecycleDependencies = {
   state: openCodeLifecycleState,
-  env: {
-    ENV_CONFIGURED_OPENCODE_PORT,
-    ENV_CONFIGURED_OPENCODE_HOST,
-    ENV_EFFECTIVE_PORT,
-    ENV_CONFIGURED_OPENCODE_HOSTNAME,
-    ENV_SKIP_OPENCODE_START,
-  },
   syncToHmrState,
   syncFromHmrState,
-  getOpenCodeAuthHeaders,
-  buildOpenCodeUrl,
-  waitForReady,
-  normalizeApiPrefix,
-  applyOpencodeBinaryFromSettings,
-  ensureOpencodeCliEnv,
-  ensureLocalOpenCodeServerPassword,
-  resolveManagedOpenCodeLaunchSpec,
   setOpenCodePort,
   setDetectedOpenCodeApiPrefix,
   setupProxy: (...args) => setupProxy(...args),
   ensureOpenCodeApiPrefix,
-  clearResolvedOpenCodeBinary,
-  buildAugmentedPath,
-  buildManagedOpenCodePath,
-  getManagedOpenCodeShellEnvSnapshot: getLoginShellEnvSnapshot,
   getActiveSessionCount,
-});
+};
+
+const openCodeLifecycleRuntime = OPENCHAMBER_BACKEND === 'pi'
+  ? createPiGatewayLifecycleRuntime(lifecycleDependencies)
+  : createOpenCodeLifecycleRuntime({
+    ...lifecycleDependencies,
+    env: {
+      ENV_CONFIGURED_OPENCODE_PORT,
+      ENV_CONFIGURED_OPENCODE_HOST,
+      ENV_EFFECTIVE_PORT,
+      ENV_CONFIGURED_OPENCODE_HOSTNAME,
+      ENV_SKIP_OPENCODE_START,
+    },
+    getOpenCodeAuthHeaders,
+    buildOpenCodeUrl,
+    waitForReady,
+    normalizeApiPrefix,
+    applyOpencodeBinaryFromSettings,
+    ensureOpencodeCliEnv,
+    ensureLocalOpenCodeServerPassword,
+    resolveManagedOpenCodeLaunchSpec,
+    clearResolvedOpenCodeBinary,
+    buildAugmentedPath,
+    buildManagedOpenCodePath,
+    getManagedOpenCodeShellEnvSnapshot: getLoginShellEnvSnapshot,
+  });
 
 const restartOpenCode = (...args) => openCodeLifecycleRuntime.restartOpenCode(...args);
 const waitForOpenCodeReady = (...args) => openCodeLifecycleRuntime.waitForOpenCodeReady(...args);
@@ -1148,7 +1158,7 @@ const gracefulShutdownRuntime = createGracefulShutdownRuntime({
   setMessageStreamRuntime: (value) => {
     messageStreamRuntime = value;
   },
-  shouldSkipOpenCodeStop: () => ENV_SKIP_OPENCODE_START || isExternalOpenCode,
+  shouldSkipOpenCodeStop: () => OPENCHAMBER_BACKEND !== 'pi' && (ENV_SKIP_OPENCODE_START || isExternalOpenCode),
   getOpenCodePort: () => openCodePort,
   getOpenCodeProcess: () => openCodeProcess,
   setOpenCodeProcess: (value) => {
@@ -1644,7 +1654,13 @@ async function main(options = {}) {
     isReady: () => isOpenCodeReady,
     restartOpenCode: () => restartOpenCode(),
     getOpenCodeProcessInfo: () => {
-      const managed = Boolean((openCodeProcess || openCodePort) && !ENV_SKIP_OPENCODE_START && !isExternalOpenCode);
+      const managed = shouldReportManagedOpenCodeProcess({
+        backend: OPENCHAMBER_BACKEND,
+        processHandle: openCodeProcess,
+        port: openCodePort,
+        skipStart: ENV_SKIP_OPENCODE_START,
+        external: isExternalOpenCode,
+      });
       // Only ever expose pid/port for a server WE manage. The Electron-side
       // killer kills by port (lsof + kill -KILL), so returning a port we don't
       // own — e.g. an external/desktop OpenCode on 4096 we attached to — would

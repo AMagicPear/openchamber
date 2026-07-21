@@ -74,7 +74,7 @@ the corresponding translation is designed and tested.
 | Session list/create/get/delete | Partially implemented | Active read-only list/get uses Pi session manager; create/delete remain deferred |
 | Session messages/history | Partially implemented | Active branch history is converted from Pi durable entries; full alias reconciliation remains deferred |
 | Session prompt and abort | Planned | Use `prompt`/`abort`, then convert stdout events to SSE |
-| `/api/event` and `/api/global/event` SSE | Planned | Existing UI event model remains authoritative |
+| `/api/event` and `/api/global/event` SSE | Partially implemented | Pi internal `/event` and `/global/event` endpoints emit the accepted `server.connected` envelope and heartbeats through the existing proxy; live Pi translation/replay remains deferred |
 | Session status | Planned | Must use live Pi events; `agent_end` alone is insufficient |
 | Models/providers/config | Planned | Classify each field; do not synthesize authoritative empties on failure |
 | Permissions/questions | Planned | Evaluate `extension_ui_request` and sidecar pending state |
@@ -87,9 +87,9 @@ IDs to Pi durable entry IDs. Do not use response correlation IDs as durable entr
 IDs. Reconcile after `agent_settled`, since Pi persistence follows public
 `message_end` and event receipt does not prove JSONL durability.
 
-## Explicitly not implemented in Phase 2A
+## Explicitly not implemented in Phase 2B
 
-- OpenCode lifecycle/proxy/index registration or SSE adapters.
+- Live Pi event translation/replay, prompt streaming, and mutation adapters.
 - Archived session listing and persistent OpenCode/live-to-Pi aliasing.
 - OpenCode SDK changes.
 - Model/provider/config/MCP/permission/question emulation.

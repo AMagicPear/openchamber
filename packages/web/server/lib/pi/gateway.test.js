@@ -1,4 +1,5 @@
 import { createOpencodeClient } from '@opencode-ai/sdk/v2';
+import http from 'node:http';
 import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
 import { createPiCompatibilityGateway } from './gateway.js';
@@ -33,6 +34,36 @@ function repositoryHarness() {
 }
 
 describe('Pi compatibility gateway', () => {
+  it('serves connected SSE envelopes, heartbeats, and closes live streams', async () => {
+    const gateway = createPiCompatibilityGateway({
+      sessionRepository: repositoryHarness(),
+      defaultDirectory: directory,
+      sseHeartbeatIntervalMs: 10,
+    });
+    const started = await gateway.start();
+    const chunks = [];
+    const response = await new Promise((resolve, reject) => {
+      const request = http.get(`${started.url}/event?directory=%2Ftmp`, (res) => {
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.once('error', reject);
+        resolve(res);
+      });
+      request.once('error', reject);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(response.headers['content-type']).toContain('text/event-stream');
+    expect(response.headers['cache-control']).toContain('no-cache');
+    expect(chunks.join('')).toContain('event: server.connected');
+    expect(chunks.join('')).toContain('"directory":"/tmp"');
+    expect(chunks.join('')).toContain(': heartbeat');
+
+    const closed = new Promise((resolve) => response.once('close', resolve));
+    await gateway.close();
+    await closed;
+    await expect(gateway.close()).resolves.toBeUndefined();
+  });
+
   it('serves health, path, config, project, and read-only session routes with SDK-compatible shapes', async () => {
     const repository = repositoryHarness();
     const gateway = createPiCompatibilityGateway({

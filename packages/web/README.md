@@ -111,6 +111,13 @@ OPENCODE_HOST=https://myhost:4096 OPENCODE_SKIP_START=true openchamber
 
 </details>
 
+### Experimental Pi backend
+
+Phase 2B includes an experimental read-only Pi compatibility gateway. Select it
+with `OPENCHAMBER_BACKEND=pi`; the default remains `opencode`. Prompt/session
+mutations, archived listing, models/providers, and live Pi event translation are
+not available yet.
+
 <details>
 <summary>Bind managed OpenCode to LAN / Tailscale</summary>
 

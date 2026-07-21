@@ -87,12 +87,46 @@ live process/extension integration.
 Archived listing remains unsupported until the persistent alias sidecar exists,
 so Phase 2A does not claim complete UI bootstrap coverage.
 
-### Remaining Phase 2B work
+## Phase 2B: selectable read-only Pi backend and gateway lifecycle
 
-Phase 2B must integrate the gateway with OpenChamber's OpenCode lifecycle and
-proxy, connect per-session `rpc-process-manager` ownership, and add the runtime
-bootstrap/reconnect path. Prompt forwarding, SSE/event translation, abort, live
-status reconciliation, model/provider behavior, and the persistent optimistic/live
-message alias sidecar remain deferred. Durable read-only ids are provisional until
-that aliasing and `agent_settled` reconciliation is implemented.
+Status: implemented as an experimental backend boundary. The default remains
+OpenCode and no shared UI or OpenCode SDK/event contract was changed.
+
+### Added
+
+- `OPENCHAMBER_BACKEND` selector with normalized `opencode`/`pi` values and a
+  clear startup error for invalid explicit values. OpenCode environment
+  variables are not used as the selector.
+- `gateway-lifecycle.js` integration through the existing OpenCode-named server
+  lifecycle boundary. Each Pi start creates fresh RPC manager, session
+  repository, and gateway resources, proves loopback `/global/health`, sets the
+  existing proxy port/base URL state, and returns an idempotent process-like
+  handle. Restart closes the old gateway and RPC manager before replacement;
+  partial starts are cleaned up.
+- Existing proxy, watcher, and graceful shutdown paths now reach Pi when
+  `OPENCHAMBER_BACKEND=pi`. Pi mode ignores external OpenCode attach/probe and
+  orphan-reaper behavior. Its health monitor serializes bounded probes and
+  restarts only the in-process gateway.
+- Read-only `/global/event` and `/event` SSE endpoints with no-cache/keep-alive
+  headers, `server.connected` envelopes, validated directory metadata,
+  sub-20-second comment heartbeats, client cleanup, backpressure waiting, and
+  stream termination before gateway close.
+- Pi process-info decision helper so Electron's detached OpenCode killer never
+  receives the Pi gateway's ephemeral port.
+
+### Phase 2B limitations
+
+Pi agent-presence verification deliberately returns an unsupported error.
+Configuration refresh may restart the gateway but does not claim agent
+verification. Archived listing, models/providers, prompt/session mutations,
+permissions/questions, live Pi event translation/replay, persistent message
+aliasing, and full UI bootstrap remain absent. Phase 2B is not a full UI
+bootstrap claim.
+
+### Remaining Phase 2C+ work
+
+Prompt forwarding, live SSE/event translation, abort, live status reconciliation,
+model/provider behavior, and the persistent optimistic/live message alias
+sidecar remain deferred. Durable read-only ids are provisional until that
+aliasing and `agent_settled` reconciliation is implemented.
 

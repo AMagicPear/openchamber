@@ -99,8 +99,8 @@ Phase 2A adds three intentionally standalone modules:
   and complete equal-time boundary groups so `x-next-cursor` remains numeric and
   strictly decreasing. Standard `/session` keeps the SDK's independent `start`
   semantics. Start/close are idempotent, including close racing an in-flight
-  start. It is not registered by `server/index.js`, the OpenCode lifecycle, or
-  the existing proxy.
+  start. In Phase 2B it is registered only by the Pi lifecycle and reached
+  through the existing OpenChamber proxy.
 
 Durable history ids in this phase are provisional. Phase 3 must add the persistent
 OpenCode/live-to-Pi alias sidecar and settled reconciliation before prompt and SSE
@@ -109,6 +109,30 @@ return `[]` because the pending-request store is authoritatively empty before li
 Pi processes/extensions exist; this is not an archive or failure fallback.
 Archived listing remains unsupported until the persistent alias sidecar exists.
 Phase 2A is therefore not a complete UI bootstrap claim.
+
+## Phase 2B: backend selector and lifecycle
+
+Set `OPENCHAMBER_BACKEND=pi` to select the experimental read-only Pi backend.
+Values are case- and whitespace-normalized; only `opencode` and `pi` are
+supported. The default is `opencode`, and invalid explicit values fail clearly at
+startup. `OPENCHAMBER_BACKEND` is independent of all `OPENCODE_*` variables.
+
+`gateway-lifecycle.js` exposes the OpenCode-named lifecycle methods consumed by
+the existing server composition. In Pi mode, every managed start creates a fresh
+RPC process manager, session repository, and compatibility gateway. The gateway
+binds only to loopback on an ephemeral port, is checked through
+`/global/health`, and is represented to proxy and shutdown code as
+`{ url, pid: null, close() }`. Closing that handle stops the gateway before all
+Pi RPC processes; restart and partial-start cleanup are idempotent.
+
+The gateway's read-only `/global/event` and `/event` endpoints emit an initial
+`server.connected` SSE payload, preserve validated directory metadata for the
+scoped endpoint, and send frequent comment heartbeats. They do not translate or
+replay live Pi events. Pi health monitoring probes only this in-process gateway,
+never external `OPENCODE_HOST`/`OPENCODE_PORT` endpoints and never runs the
+OpenCode orphan reaper. Agent-presence verification, archived listing,
+models/providers, prompt/session mutation, and live event translation remain
+unsupported.
 
 ## Phase boundary
 

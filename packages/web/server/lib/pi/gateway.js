@@ -75,9 +75,31 @@ function route(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res)).catch(next);
 }
 
+function writeSseChunk(client, value) {
+  client.queue = client.queue
+    .catch(() => false)
+    .then(async (canContinue) => {
+      if (!canContinue || client.closed || client.res.writableEnded || client.res.destroyed) return false;
+      if (client.res.write(value)) return true;
+      return await new Promise((resolve) => {
+        const finish = () => {
+          client.res.off('drain', finish);
+          client.res.off('close', finish);
+          client.res.off('error', finish);
+          resolve(!client.closed && !client.res.writableEnded && !client.res.destroyed);
+        };
+        client.res.once('drain', finish);
+        client.res.once('close', finish);
+        client.res.once('error', finish);
+      });
+    });
+  return client.queue;
+}
+
 /**
- * Create the standalone Phase 2A Pi -> OpenCode compatibility upstream.
- * It intentionally has no mutation, SSE, auth, or OpenCode lifecycle wiring.
+ * Create the Pi -> OpenCode compatibility upstream.
+ * The gateway remains read-only in Phase 2B. Its SSE endpoints are the internal
+ * upstream consumed by the existing OpenChamber proxy and watcher.
  */
 export function createPiCompatibilityGateway(options = {}) {
   if (!options.sessionRepository) throw new TypeError('sessionRepository is required');
@@ -89,11 +111,58 @@ export function createPiCompatibilityGateway(options = {}) {
   const processManager = options.processManager;
   const createGatewayServer = options.createServer || createServer;
   const version = options.version || VERSION;
+  const sseHeartbeatIntervalMs = Number.isFinite(options.sseHeartbeatIntervalMs) && options.sseHeartbeatIntervalMs > 0
+    ? Math.min(options.sseHeartbeatIntervalMs, 19_000)
+    : 10_000;
   const app = express();
+  const sseClients = new Set();
 
   const health = (_req, res) => sendJson(res, { healthy: true, version });
   app.get('/global/health', health);
   app.get('/opencode/health', health);
+
+  const openSseStream = (req, res, directory) => {
+    const client = { req, res, directory, queue: Promise.resolve(true), closed: false, heartbeat: null };
+    const cleanup = () => {
+      if (client.closed) return;
+      client.closed = true;
+      if (client.heartbeat) clearInterval(client.heartbeat);
+      client.heartbeat = null;
+      sseClients.delete(client);
+      req.off('aborted', cleanup);
+      res.off('close', cleanup);
+      res.off('error', cleanup);
+    };
+    client.cleanup = cleanup;
+
+    sseClients.add(client);
+    req.once('aborted', cleanup);
+    res.once('close', cleanup);
+    res.once('error', cleanup);
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const connectedPayload = {
+      type: 'server.connected',
+      properties: directory ? { directory } : {},
+    };
+    void writeSseChunk(client, `event: server.connected\ndata: ${JSON.stringify(connectedPayload)}\n\n`);
+    client.heartbeat = setInterval(() => {
+      void writeSseChunk(client, ': heartbeat\n\n');
+    }, sseHeartbeatIntervalMs);
+    client.heartbeat.unref?.();
+  };
+
+  app.get('/global/event', (req, res) => openSseStream(req, res, null));
+  app.get('/event', route((req, res) => openSseStream(
+    req,
+    res,
+    optionalDirectory(req, defaultDirectory),
+  )));
 
   app.get('/path', route((req, res) => sendJson(res, pathsProvider(optionalDirectory(req, defaultDirectory)))));
   app.get('/global/config', route(async (_req, res) => sendJson(res, await readConfig(configProvider))));
@@ -230,6 +299,19 @@ export function createPiCompatibilityGateway(options = {}) {
     });
   }
 
+  function closeSseStreams() {
+    for (const client of Array.from(sseClients)) {
+      client.closed = true;
+      if (client.heartbeat) clearInterval(client.heartbeat);
+      client.heartbeat = null;
+      sseClients.delete(client);
+      client.req.off('aborted', client.cleanup);
+      client.res.off('close', client.cleanup);
+      client.res.off('error', client.cleanup);
+      if (!client.res.writableEnded && !client.res.destroyed) client.res.end();
+    }
+  }
+
   async function start() {
     if (closing) {
       await closing;
@@ -249,7 +331,10 @@ export function createPiCompatibilityGateway(options = {}) {
         resolve({ url: `http://127.0.0.1:${port}`, port });
       });
     }).then(async (result) => {
-      if (closeRequested) await closeServer(target);
+      if (closeRequested) {
+        closeSseStreams();
+        await closeServer(target);
+      }
       return result;
     }).catch((error) => {
       if (server === target) server = undefined;
@@ -279,6 +364,7 @@ export function createPiCompatibilityGateway(options = {}) {
       return undefined;
     }
     const target = server;
+    closeSseStreams();
     closing = closeServer(target).finally(() => { closing = undefined; closeRequested = false; });
     return closing;
   }
