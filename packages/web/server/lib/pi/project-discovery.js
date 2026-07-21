@@ -76,8 +76,11 @@ const settingsProjectPath = (project) => {
 /** Merge discovered projects without changing persisted settings or active selection. */
 export const mergePiProjectsIntoSettings = (settings, discoveredProjects) => {
   const existingProjects = Array.isArray(settings?.projects) ? settings.projects : [];
-  const seenPaths = new Set(existingProjects.map(settingsProjectPath).filter(Boolean));
-  const projects = [...existingProjects];
+  // Drop previously-discovered temp-directory projects (persisted before the
+  // filter was added).  Only keep projects whose path isn't a temporary cwd.
+  const kept = existingProjects.filter((p) => !shouldHidePiCwd(p.path));
+  const seenPaths = new Set(kept.map(settingsProjectPath).filter(Boolean));
+  const projects = [...kept];
 
   for (const project of discoveredProjects) {
     if (seenPaths.has(project.path)) continue;

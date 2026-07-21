@@ -123,4 +123,21 @@ describe('Pi project discovery', () => {
       '/Users/amagicpear/projects/pichamber',
     ]);
   });
+
+  it('removes previously-persisted temp cwd projects from existing settings', () => {
+    const response = mergePiProjectsIntoSettings(
+      {
+        projects: [
+          { id: 'real', path: '/Users/amagicpear/projects/openchamber', addedAt: 1, lastOpenedAt: 2 },
+          { id: 'old-temp', path: '/var/folders/dk/gyt7kxxs4zvbyf509znpbbvr0000gn/T/pi-old-test', addedAt: 3, lastOpenedAt: 4 },
+          { id: 'old-tmp', path: '/private/tmp', addedAt: 5, lastOpenedAt: 6 },
+        ],
+      },
+      [],
+    );
+
+    expect(response.projects.map((p) => p.path)).toEqual([
+      '/Users/amagicpear/projects/openchamber',
+    ]);
+  });
 });
