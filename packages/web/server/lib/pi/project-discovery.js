@@ -24,6 +24,17 @@ const normalizeAbsolutePath = (value) => {
   return path.resolve(value);
 };
 
+/** Skip sessions whose cwd is an obvious macOS temporary directory. */
+const isTemporaryCwd = (cwd) => {
+  if (!cwd) return true;
+  const resolved = path.resolve(cwd);
+  const segs = resolved.split(path.sep).filter(Boolean);
+  // /var/folders/<XX>/<UUID>/T/...          → segs[0]=var,    segs[4]=T
+  // /private/var/folders/<XX>/<UUID>/T/...  → segs[0]=private, segs[5]=T
+  return (segs.at(0) === 'var' && segs.at(1) === 'folders' && segs.at(4) === 'T')
+    || (segs.at(0) === 'private' && segs.at(1) === 'var' && segs.at(2) === 'folders' && segs.at(5) === 'T');
+};
+
 const projectTimestamps = (session) => {
   const created = timestampOf(session.created);
   const modified = timestampOf(session.modified);
@@ -46,7 +57,7 @@ export const discoverPiProjects = (sessions) => {
   const projectsByPath = new Map();
   for (const session of sessions) {
     const projectPath = normalizeAbsolutePath(session?.cwd);
-    if (!projectPath) continue;
+    if (!projectPath || isTemporaryCwd(projectPath)) continue;
 
     const timestamps = projectTimestamps(session);
     const existing = projectsByPath.get(projectPath);

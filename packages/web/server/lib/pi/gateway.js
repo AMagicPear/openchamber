@@ -272,8 +272,14 @@ export function createPiCompatibilityGateway(options = {}) {
 
   app.get('/project', route(async (req, res) => {
     const requested = req.query.directory === undefined ? undefined : directoryValue(req.query.directory);
-    const sessions = await repository.listAll();
-    const directories = new Set(sessions.map((session) => session.cwd).filter(Boolean).map((directory) => path.resolve(directory)));
+    const all = await repository.listAll();
+    const directories = new Set(
+      all
+        .filter((s) => !shouldHideCwd(s.cwd))
+        .map((s) => s.cwd)
+        .filter(Boolean)
+        .map((cwd) => path.resolve(cwd)),
+    );
     directories.add(requested || directoryValue(defaultDirectory));
     sendJson(res, [...directories].sort().map((directory) => piDirectoryToProject(directory)));
   }));

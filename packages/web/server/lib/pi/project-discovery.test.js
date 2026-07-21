@@ -109,4 +109,18 @@ describe('Pi project discovery', () => {
 
     await expect(augmentSettingsResponse({ projects: [{ path: '/persisted' }] })).rejects.toThrow('catalog unavailable');
   });
+
+  it('removes sessions whose cwd is a macOS per-user temp directory', () => {
+    const projects = discoverPiProjects([
+      session('/var/folders/dk/gyt7kxxs4zvbyf509znpbbvr0000gn/T/pi-runtime-1783843528371-abc', 300),
+      session('/Users/amagicpear/projects/openchamber', 200),
+      session('/private/var/folders/dk/gyt7kxxs4zvbyf509znpbbvr0000gn/T/pi-smoke-test', 100),
+      session('/Users/amagicpear/projects/pichamber', 50),
+    ]);
+
+    expect(projects.map((p) => p.path)).toEqual([
+      '/Users/amagicpear/projects/openchamber',
+      '/Users/amagicpear/projects/pichamber',
+    ]);
+  });
 });
