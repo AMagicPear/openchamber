@@ -22,8 +22,8 @@ describe('Pi project discovery', () => {
     const response = await augmentSettingsResponse(settings);
 
     expect(manager.listAll).toHaveBeenCalledTimes(1);
+    // Settings projects are replaced entirely by Pi session cwds.
     expect(response.projects).toEqual([
-      ...settings.projects,
       {
         id: expect.stringMatching(/^path_/),
         path: path.resolve(currentDirectory),
@@ -55,7 +55,7 @@ describe('Pi project discovery', () => {
     ]);
   });
 
-  it('keeps existing project metadata and order ahead of discovered projects', () => {
+  it('replaces settings projects with the current Pi session directories', () => {
     const existing = [
       { id: 'manual-one', path: '/workspace/one', label: 'Keep this', addedAt: 7, lastOpenedAt: 8 },
       { id: 'manual-two', path: '/workspace/two', color: 'red', addedAt: 9, lastOpenedAt: 10 },
@@ -70,19 +70,15 @@ describe('Pi project discovery', () => {
       ]),
     );
 
-    expect(response).toEqual({
-      projects: [
-        ...existing,
-        {
-          id: expect.stringMatching(/^path_/),
-          path: '/workspace/three',
-          addedAt: 100,
-          lastOpenedAt: 200,
-        },
-      ],
-      activeProjectId: 'manual-two',
-      themeId: 'dark',
-    });
+    // Existing projects are replaced entirely; only Pi session cwds survive, in
+    // the order they appear (discoverPiProjects preserves Map insertion order).
+    expect(response.projects.map((p) => p.path)).toEqual([
+      '/workspace/two',
+      '/workspace/three',
+      '/workspace/one',
+    ]);
+    expect(response.activeProjectId).toBe('manual-two');
+    expect(response.themeId).toBe('dark');
   });
 
   it('preserves newest-first cwd order from the Pi catalog', () => {
@@ -124,16 +120,17 @@ describe('Pi project discovery', () => {
     ]);
   });
 
-  it('removes previously-persisted temp cwd projects from existing settings', () => {
+  it('replaces persisted projects entirely — stale temp dirs vanish', () => {
     const response = mergePiProjectsIntoSettings(
       {
         projects: [
           { id: 'real', path: '/Users/amagicpear/projects/openchamber', addedAt: 1, lastOpenedAt: 2 },
-          { id: 'old-temp', path: '/var/folders/dk/gyt7kxxs4zvbyf509znpbbvr0000gn/T/pi-old-test', addedAt: 3, lastOpenedAt: 4 },
-          { id: 'old-tmp', path: '/private/tmp', addedAt: 5, lastOpenedAt: 6 },
+          { id: 'old-temp', path: '/var/folders/dk/abc/T/pi-old-test', addedAt: 3, lastOpenedAt: 4 },
         ],
       },
-      [],
+      discoverPiProjects([
+        session('/Users/amagicpear/projects/openchamber', 200),
+      ]),
     );
 
     expect(response.projects.map((p) => p.path)).toEqual([
