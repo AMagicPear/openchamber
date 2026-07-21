@@ -244,28 +244,27 @@ export const OpenChamberLogo: React.FC<OpenChamberLogoProps> = ({
         strokeLinejoin="round"
       />
       
-      {/* OpenCode logo on top face */}
+      {/* π mark on top face — pi.svg paths projected through the isometric matrix */}
       <g
         opacity={1}
         className={isAnimated ? 'oc-logo-glow' : undefined}
         style={isAnimated ? ({ '--oc-glow-color': strokeColor } as React.CSSProperties) : undefined}
       >
         {/*
-          Isometric transform for top face:
-          OpenCode logo (32x40 viewBox) centered and projected to isometric plane
+          Paths lifted verbatim from /Users/amagicpear/Downloads/pi.svg
+          (800×800 viewBox). translate(-400,-400) centers the glyph at
+          origin; isoMatrix then projects the flat 2D glyph onto the
+          cube's isometric top face; scale 0.06 fits it within the face.
         */}
-        <g transform={`${isoMatrix} scale(0.75)`}>
-          {/* OpenCode logo - outer frame with inner square */}
-          {/* Outer frame (centered at origin, original: 0,0 to 32,40) */}
+        <g transform={`${isoMatrix} scale(0.06) translate(-400, -400)`}>
           <path
             fillRule="evenodd"
             clipRule="evenodd"
-            d="M-16 -20 L16 -20 L16 20 L-16 20 Z M-8 -12 L-8 12 L8 12 L8 -12 Z"
+            d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"
             fill={logoFillColor}
           />
-          {/* Inner square */}
           <path
-            d="M-8 -4 L8 -4 L8 12 L-8 12 Z"
+            d="M517.36 400H634.72V634.72H517.36Z"
             fill={logoFillColor}
             fillOpacity="0.4"
           />

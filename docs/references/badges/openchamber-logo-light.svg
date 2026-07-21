@@ -39,9 +39,10 @@
   <path d="M81.176 68 L91.568 62 L91.568 74 L81.176 80 Z" fill="black" fill-opacity="0.07"/>
   <!-- Top face - open -->
   <path d="M50 2 L8.432 26 L50 50 L91.568 26 Z" fill="none" stroke="black" stroke-width="2" stroke-linejoin="round"/>
-  <!-- OpenCode logo on top face -->
-  <g transform="matrix(0.866, 0.5, -0.866, 0.5, 50, 26) scale(0.75)">
-    <path fill-rule="evenodd" clip-rule="evenodd" d="M-16 -20 L16 -20 L16 20 L-16 20 Z M-8 -12 L-8 12 L8 12 L8 -12 Z" fill="black"/>
-    <path d="M-8 -4 L8 -4 L8 12 L-8 12 Z" fill="black" fill-opacity="0.4"/>
+  <!-- π mark on top face — pi.svg paths projected through the isometric matrix -->
+  <!-- Source: /Users/amagicpear/Downloads/pi.svg (800x800 viewBox) -->
+  <g transform="matrix(0.866, 0.5, -0.866, 0.5, 50, 26) scale(0.06) translate(-400, -400)">
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z" fill="black"/>
+    <path d="M517.36 400H634.72V634.72H517.36Z" fill="black" fill-opacity="0.4"/>
   </g>
 </svg>
