@@ -24,8 +24,12 @@ const normalizeAbsolutePath = (value) => {
   return path.resolve(value);
 };
 
-/** Skip sessions whose cwd is an obvious macOS temporary directory. */
-const isTemporaryCwd = (cwd) => {
+/**
+ * Returns true when the cwd is a macOS per-user temporary directory
+ * (/var/folders/<XX>/<UUID>/T/...) that should not appear in session
+ * listings or project directories.
+ */
+export const shouldHidePiCwd = (cwd) => {
   if (!cwd) return true;
   const resolved = path.resolve(cwd);
   const segs = resolved.split(path.sep).filter(Boolean);
@@ -57,7 +61,7 @@ export const discoverPiProjects = (sessions) => {
   const projectsByPath = new Map();
   for (const session of sessions) {
     const projectPath = normalizeAbsolutePath(session?.cwd);
-    if (!projectPath || isTemporaryCwd(projectPath)) continue;
+    if (!projectPath || shouldHidePiCwd(projectPath)) continue;
 
     const timestamps = projectTimestamps(session);
     const existing = projectsByPath.get(projectPath);

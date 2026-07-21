@@ -15,6 +15,7 @@ import {
 } from './opencode-shapes.js';
 import { createPiLiveSessionRegistry } from './live-session-registry.js';
 import { createPiEventTranslator } from './event-translator.js';
+import { shouldHidePiCwd } from './project-discovery.js';
 
 function fail(status, name, message) {
   const error = new Error(message);
@@ -64,20 +65,8 @@ function sortSessions(sessions) {
   });
 }
 
-/** Hide sessions whose cwd is an obvious temporary directory. */
-function shouldHideCwd(cwd) {
-  if (!cwd) return false;
-  const resolved = path.resolve(cwd);
-  const segs = resolved.split(path.sep).filter(Boolean);
-  // macOS per-user temp:
-  //   /var/folders/<XX>/<UUID>/T/...          → segs[0]=var,    segs[4]=T
-  //   /private/var/folders/<XX>/<UUID>/T/...  → segs[0]=private, segs[5]=T
-  return (segs.at(0) === 'var' && segs.at(1) === 'folders' && segs.at(4) === 'T')
-    || (segs.at(0) === 'private' && segs.at(1) === 'var' && segs.at(2) === 'folders' && segs.at(5) === 'T');
-}
-
 function filterSessions(sessions) {
-  return sessions.filter((s) => !shouldHideCwd(s.cwd));
+  return sessions.filter((s) => !shouldHidePiCwd(s.cwd));
 }
 
 function sendJson(res, value) {
@@ -275,7 +264,7 @@ export function createPiCompatibilityGateway(options = {}) {
     const all = await repository.listAll();
     const directories = new Set(
       all
-        .filter((s) => !shouldHideCwd(s.cwd))
+        .filter((s) => !shouldHidePiCwd(s.cwd))
         .map((s) => s.cwd)
         .filter(Boolean)
         .map((cwd) => path.resolve(cwd)),
